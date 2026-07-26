@@ -124,6 +124,17 @@ struct ContentView: View {
         .sheet(isPresented: $showingSettings) {
             ConnectionSettingsSheet(theme: theme, config: config)
         }
+        .alert(
+            "Transfer failed",
+            isPresented: Binding(
+                get: { core.transferError != nil },
+                set: { if !$0 { core.transferError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { core.transferError = nil }
+        } message: {
+            Text(core.transferError ?? "")
+        }
         .overlay {
             if let request = core.pendingTrust {
                 ModernIncomingOverlay(
@@ -1191,6 +1202,7 @@ private struct ConnectionSettingsSheet: View {
     @State private var notifications: Bool
     @State private var clipboard: Bool
     @State private var revealKey = false
+    @State private var revealSecret = false
     @State private var copied = false
 
     init(theme: WWTheme, config: CompanionConfig) {
@@ -1288,7 +1300,13 @@ private struct ConnectionSettingsSheet: View {
                                 .font(.system(size: 10.5, weight: .semibold))
                                 .foregroundStyle(theme.secondary)
                             HStack(spacing: 8) {
-                                TextField("At least 20 characters", text: $secret)
+                                Group {
+                                    if revealSecret {
+                                        TextField("At least 20 characters", text: $secret)
+                                    } else {
+                                        SecureField("At least 20 characters", text: $secret)
+                                    }
+                                }
                                     .textFieldStyle(.plain)
                                     .font(.system(size: 12, design: .monospaced))
                                     .foregroundStyle(theme.text)
@@ -1298,6 +1316,9 @@ private struct ConnectionSettingsSheet: View {
                                                 in: RoundedRectangle(cornerRadius: 11, style: .continuous))
                                     .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous)
                                         .stroke(theme.border, lineWidth: 1))
+                                smallButton(revealSecret ? "Hide" : "Show") {
+                                    revealSecret.toggle()
+                                }
                                 smallButton("Generate") {
                                     secret = wwGenerateSecret()
                                     copied = false

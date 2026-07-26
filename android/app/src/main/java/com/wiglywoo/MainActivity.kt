@@ -69,6 +69,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -128,7 +130,7 @@ class MainActivity : ComponentActivity() {
 
 private data class PeerRow(val id: String, val name: String, val fingerprint: String)
 private data class TransferUi(val name: String, val dir: String, val sent: Long, val total: Long, val speed: Double)
-private data class Trust(val name: String, val fingerprint: String, val file: String)
+private data class Trust(val name: String, val fingerprint: String, val file: String, val size: Long)
 
 // ═══ v2 design tokens ════════════════════════════════════════════════════════
 
@@ -207,10 +209,81 @@ fun WiglyWooApp(startupError: String? = null) {
 @Composable
 private fun ErrorScreen(message: String) {
     val t = LocalV2.current
-    Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("Startup error", fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, color = t.err)
-        LazyColumn(Modifier.weight(1f)) {
-            items(message.lines()) { Text(it, fontSize = 12.sp, color = t.tx2) }
+    val context = LocalContext.current
+    var showDetails by remember { mutableStateOf(false) }
+    Column(
+        Modifier.fillMaxSize().padding(20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Column(
+            Modifier.fillMaxWidth().modernCard(t).padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Box(
+                Modifier.size(58.dp).background(t.err.copy(alpha = 0.12f), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("!", fontSize = 24.sp, fontWeight = FontWeight.ExtraBold, color = t.err)
+            }
+            Text(
+                "Wigly Woo couldn’t start",
+                fontSize = 20.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = t.tx,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(top = 14.dp)
+            )
+            Text(
+                "Close and reopen the app. If this keeps happening, copy the technical details when reporting the problem.",
+                fontSize = 12.5.sp,
+                lineHeight = 18.sp,
+                color = t.tx2,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(top = 6.dp)
+            )
+            if (showDetails) {
+                LazyColumn(
+                    Modifier.fillMaxWidth().heightIn(max = 210.dp).padding(top = 14.dp)
+                        .background(t.inset, RoundedCornerShape(12.dp))
+                        .padding(12.dp)
+                ) {
+                    items(message.lines()) { line ->
+                        Text(line, fontSize = 10.5.sp, color = t.tx3)
+                    }
+                }
+            }
+            Row(
+                Modifier.fillMaxWidth().padding(top = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    if (showDetails) "Hide details" else "Show details",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = t.tx2,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.weight(1f).heightIn(min = 48.dp)
+                        .background(t.inset, RoundedCornerShape(12.dp))
+                        .pressable { showDetails = !showDetails }
+                        .padding(vertical = 16.dp)
+                )
+                Text(
+                    "Copy details",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.weight(1f).heightIn(min = 48.dp)
+                        .background(t.accent, RoundedCornerShape(12.dp))
+                        .pressable {
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Wigly Woo error", message))
+                            Toast.makeText(context, "Error details copied", Toast.LENGTH_SHORT).show()
+                        }
+                        .padding(vertical = 16.dp)
+                )
+            }
         }
     }
 }
@@ -303,7 +376,12 @@ private fun MainScreen() {
                         val row = PeerRow(ev.optString("id"), ev.optString("name"), ev.optString("fingerprint"))
                         if (peers.none { it.id == row.id }) peers.add(row)
                     }
-                    "trust_request" -> trust = Trust(ev.optString("name"), ev.optString("fingerprint"), ev.optString("file"))
+                    "trust_request" -> trust = Trust(
+                        ev.optString("name"),
+                        ev.optString("fingerprint"),
+                        ev.optString("file"),
+                        ev.optLong("size")
+                    )
                     "progress" -> {
                         val name = ev.optString("name")
                         val dir = ev.optString("dir")
@@ -320,11 +398,18 @@ private fun MainScreen() {
                         active = null
                         track.reset()
                         refreshReceived()
+                        Toast.makeText(context, "Transfer complete", Toast.LENGTH_SHORT).show()
                     }
-                    "canceled", "error" -> {
+                    "canceled" -> {
                         active = null
                         track.reset()
                         refreshReceived()
+                    }
+                    "error" -> {
+                        active = null
+                        track.reset()
+                        refreshReceived()
+                        Toast.makeText(context, "Transfer failed — check both devices and try again", Toast.LENGTH_LONG).show()
                     }
                 }
             }
@@ -2076,8 +2161,14 @@ private fun IncomingDropSheet(trust: Trust, onAccept: () -> Unit, onDecline: () 
             Text(extOf(trust.file), fontSize = 9.5.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.6.sp,
                 color = t.tx3, modifier = Modifier.background(t.chipBg, RoundedCornerShape(100))
                     .padding(horizontal = 8.dp, vertical = 3.dp))
-            Text(trust.file, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = t.tx,
-                maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            Column(Modifier.weight(1f)) {
+                Text(trust.file, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = t.tx,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (trust.size > 0) {
+                    Text(fmtBytes(trust.size), fontSize = 10.5.sp, color = t.tx3,
+                        modifier = Modifier.padding(top = 2.dp))
+                }
+            }
         }
 
         Text(
@@ -2121,6 +2212,7 @@ private fun LinkSetupSheet(
     var enabled by remember(initial) { mutableStateOf(initial.enabled) }
     var notifications by remember(initial) { mutableStateOf(initial.notificationsEnabled) }
     var clipboard by remember(initial) { mutableStateOf(initial.clipboardEnabled) }
+    var revealSecret by remember(initial) { mutableStateOf(false) }
     val candidate = CompanionConfig(url, key, secret, enabled, notifications, clipboard).normalized()
     val saveDisabled = enabled && !candidate.isComplete
 
@@ -2175,11 +2267,13 @@ private fun LinkSetupSheet(
             title = "Pairing secret",
             detail = "This is the private password for your devices. Keep it out of screenshots and chat."
         ) {
-            V3LabeledField(
+            V3LabeledSecretField(
                 label = "Shared secret",
                 value = secret,
                 onChange = { secret = it.trim() },
-                placeholder = "At least 20 characters"
+                placeholder = "At least 20 characters",
+                revealed = revealSecret,
+                onToggleReveal = { revealSecret = !revealSecret }
             )
             Text(
                 "Generate a new secret",
@@ -2319,6 +2413,53 @@ private fun V3LabeledField(
         Text(label, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, color = t.tx2,
             modifier = Modifier.padding(bottom = 5.dp))
         V2Field(value, onChange, placeholder)
+    }
+}
+
+@Composable
+private fun V3LabeledSecretField(
+    label: String,
+    value: String,
+    onChange: (String) -> Unit,
+    placeholder: String,
+    revealed: Boolean,
+    onToggleReveal: () -> Unit,
+) {
+    val t = LocalV2.current
+    Column {
+        Text(label, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, color = t.tx2,
+            modifier = Modifier.padding(bottom = 5.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = value,
+                onValueChange = onChange,
+                placeholder = { Text(placeholder, fontSize = 12.5.sp, color = t.tx.copy(alpha = 0.38f)) },
+                singleLine = true,
+                visualTransformation = if (revealed) VisualTransformation.None else PasswordVisualTransformation(),
+                shape = RoundedCornerShape(13.dp),
+                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.5.sp, color = t.tx),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedContainerColor = t.inset,
+                    unfocusedContainerColor = t.inset,
+                    focusedBorderColor = t.tx3,
+                    unfocusedBorderColor = t.hair,
+                    cursorColor = t.tx
+                ),
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                if (revealed) "Hide" else "Show",
+                fontSize = 11.5.sp,
+                fontWeight = FontWeight.Bold,
+                color = t.tx2,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.heightIn(min = 56.dp)
+                    .background(t.inset, RoundedCornerShape(13.dp))
+                    .border(1.dp, t.hair, RoundedCornerShape(13.dp))
+                    .pressable(onToggleReveal)
+                    .padding(horizontal = 13.dp, vertical = 19.dp)
+            )
+        }
     }
 }
 

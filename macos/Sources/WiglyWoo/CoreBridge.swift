@@ -43,6 +43,7 @@ final class CoreBridge: ObservableObject {
     @Published var received: [URL] = []
     @Published var sessionTotal: Int64 = 0
     @Published var pendingTrust: TrustRequest?
+    @Published var transferError: String?
 
     private(set) var saveDir = URL(fileURLWithPath: ".")
 
@@ -66,6 +67,7 @@ final class CoreBridge: ObservableObject {
     func stop() { woo_stop() }
 
     func sendFile(to peer: Peer, path: String) {
+        transferError = nil
         peer.id.withCString { pid in
             path.withCString { p in _ = woo_send_file(pid, p) }
         }
@@ -122,6 +124,9 @@ final class CoreBridge: ObservableObject {
             active = nil
             resetSpeed()
             refreshReceived()
+            if type == "error" {
+                transferError = "The transfer couldn’t finish. Make sure both devices are still open and on the same network, then try again."
+            }
         default:
             break
         }
