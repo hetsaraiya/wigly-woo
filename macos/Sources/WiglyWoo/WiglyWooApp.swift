@@ -10,7 +10,7 @@ struct WiglyWooApp: App {
             ContentView()
                 .environmentObject(core)
                 .environmentObject(companion)
-                .frame(minWidth: 760, idealWidth: 960, minHeight: 680, idealHeight: 830)
+                .frame(minWidth: 820, idealWidth: 1040, minHeight: 620, idealHeight: 760)
                 .onAppear {
                     let dir = FileManager.default
                         .urls(for: .downloadsDirectory, in: .userDomainMask).first?

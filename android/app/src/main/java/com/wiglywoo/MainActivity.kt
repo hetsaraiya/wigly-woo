@@ -137,27 +137,30 @@ private data class V2(
     val glass: Color, val glass2: Color, val stroke: Color, val hair: Color,
     val tx: Color, val tx2: Color, val tx3: Color,
     val ink: Color, val onInk: Color,
+    val accent: Color, val accentSoft: Color, val surface: Color,
     val ok: Color, val warn: Color, val warnBg: Color, val warnLine: Color, val err: Color,
     val inset: Color, val chipBg: Color, val scrim: Color,
 )
 
 private val LightV2 = V2(
-    wallTop = Color(0xFFEFEDE8), wallBottom = Color(0xFFE3E1DB),
-    glass = Color(0xC7FFFFFF), glass2 = Color(0xEBFFFFFF),
-    stroke = Color(0xBFFFFFFF), hair = Color(0x1A191A20),
-    tx = Color(0xFF17181C), tx2 = Color(0xFF54565E), tx3 = Color(0xFF8E9097),
-    ink = Color(0xFF17181C), onInk = Color(0xFFF4F3EF),
+    wallTop = Color(0xFFF6F7FB), wallBottom = Color(0xFFF1F3F8),
+    glass = Color(0xFFFFFFFF), glass2 = Color(0xFFFFFFFF),
+    stroke = Color(0x161F2430), hair = Color(0x161F2430),
+    tx = Color(0xFF1B1E27), tx2 = Color(0xFF5E6370), tx3 = Color(0xFF8F94A0),
+    ink = Color(0xFF1B1E27), onInk = Color(0xFFFFFFFF),
+    accent = Color(0xFF555BDC), accentSoft = Color(0x1A555BDC), surface = Color(0xFFFFFFFF),
     ok = Color(0xFF1F9D54), warn = Color(0xFFB57A12),
     warnBg = Color(0x1AB57A12), warnLine = Color(0x42B57A12), err = Color(0xFFCF4A3F),
-    inset = Color(0x99FFFFFF), chipBg = Color(0x0D17181C), scrim = Color(0x59141419),
+    inset = Color(0xFFF6F7FB), chipBg = Color(0x0D17181C), scrim = Color(0x59141419),
 )
 
 private val DarkV2 = V2(
-    wallTop = Color(0xFF131418), wallBottom = Color(0xFF0E0F13),
-    glass = Color(0xD91D1F25), glass2 = Color(0xF524262D),
+    wallTop = Color(0xFF111217), wallBottom = Color(0xFF111217),
+    glass = Color(0xFF1D2028), glass2 = Color(0xFF242832),
     stroke = Color(0x17FFFFFF), hair = Color(0x17FFFFFF),
-    tx = Color(0xFFF1F1EE), tx2 = Color(0xFFA3A6AE), tx3 = Color(0xFF686B74),
-    ink = Color(0xFFF1F1EE), onInk = Color(0xFF131418),
+    tx = Color(0xFFF4F5F8), tx2 = Color(0xFFA8ACB8), tx3 = Color(0xFF737886),
+    ink = Color(0xFFF4F5F8), onInk = Color(0xFF111217),
+    accent = Color(0xFF7C83FF), accentSoft = Color(0x247C83FF), surface = Color(0xFF1D2028),
     ok = Color(0xFF4ECB85), warn = Color(0xFFE8B45A),
     warnBg = Color(0x1AE8B45A), warnLine = Color(0x47E8B45A), err = Color(0xFFEE7B6F),
     inset = Color(0x4D000000), chipBg = Color(0x0FFFFFFF), scrim = Color(0x80000000),
@@ -212,7 +215,7 @@ private fun ErrorScreen(message: String) {
     }
 }
 
-private enum class Tab { Space, Drops, Link }
+private enum class Tab { Send, Inbox, Companion }
 
 private const val SHIZUKU_MANAGER_PACKAGE = "moe.shizuku.privileged.api"
 
@@ -225,7 +228,7 @@ private fun MainScreen() {
         ActivityResultContracts.RequestPermission()
     ) { }
 
-    var tab by remember { mutableStateOf(Tab.Space) }
+    var tab by remember { mutableStateOf(Tab.Send) }
     var identity by remember { mutableStateOf("") }
     val peers = remember { mutableStateListOf<PeerRow>() }
     val received = remember { mutableStateListOf<File>() }
@@ -351,25 +354,29 @@ private fun MainScreen() {
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
-            CapsuleBar(state = companionState, config = config, transfer = active,
-                onTap = { tab = Tab.Link })
+            MobileAppBar(
+                state = companionState,
+                config = config,
+                onStatusTap = { tab = Tab.Companion }
+            )
 
             Box(Modifier.weight(1f)) {
                 when (tab) {
-                    Tab.Space -> SpaceTab(
+                    Tab.Send -> SendTabV3(
                         peers = peers, transfer = active, files = received,
-                        orbMenuFor = orbMenuFor,
-                        onOrbTap = { id -> orbMenuFor = if (orbMenuFor == id) null else id },
+                        companionOnline = companionState == SupabaseRealtimeClient.State.CONNECTED,
                         onSendFile = { peer -> orbMenuFor = null; target = peer; picker.launch("*/*") },
                         onSendClipboard = { orbMenuFor = null; sendClipboard() },
                         onCancel = { CoreBridge.cancel() },
-                        onOpenFile = { f -> openFile(context, f) })
-                    Tab.Drops -> DropsTab(
+                        onOpenFile = { f -> openFile(context, f) },
+                        onOpenInbox = { tab = Tab.Inbox },
+                        onOpenCompanion = { tab = Tab.Companion })
+                    Tab.Inbox -> InboxTabV3(
                         files = received, sessionTotal = sessionTotal,
                         onRefresh = { refreshReceived(); Toast.makeText(context, "Up to date", Toast.LENGTH_SHORT).show() },
                         onOpen = { f -> openFile(context, f) },
                         onShare = { f -> shareFile(context, f) })
-                    Tab.Link -> LinkTab(
+                    Tab.Companion -> CompanionTabV3(
                         state = companionState, config = config,
                         notifAccess = notifAccess, kbEnabled = kbEnabled,
                         shizukuStatus = shizukuStatus,
@@ -393,7 +400,7 @@ private fun MainScreen() {
                 }
             }
 
-            DockBar(tab = tab, onSelect = { tab = it })
+            BottomNavV3(tab = tab, onSelect = { tab = it })
         }
 
         // ── incoming drop sheet ──
@@ -512,6 +519,898 @@ private fun StatusDot(color: Color, size: androidx.compose.ui.unit.Dp = 9.dp) {
         Modifier.size(size + 6.dp).background(color.copy(alpha = 0.16f), CircleShape),
         contentAlignment = Alignment.Center
     ) { Box(Modifier.size(size).background(color, CircleShape)) }
+}
+
+// ═══ v3 product UI ══════════════════════════════════════════════════════════
+
+private fun Modifier.modernCard(t: V2, radius: androidx.compose.ui.unit.Dp = 20.dp): Modifier {
+    val shape = RoundedCornerShape(radius)
+    return this
+        .shadow(4.dp, shape, spotColor = Color.Black.copy(alpha = 0.16f))
+        .background(t.surface, shape)
+        .border(1.dp, t.hair, shape)
+}
+
+@Composable
+private fun MobileAppBar(
+    state: SupabaseRealtimeClient.State,
+    config: CompanionConfig,
+    onStatusTap: () -> Unit,
+) {
+    val t = LocalV2.current
+    val (status, color) = when {
+        !config.isComplete -> "Companion not set up" to t.tx3
+        !config.enabled -> "Companion paused" to t.tx3
+        state == SupabaseRealtimeClient.State.CONNECTED -> "Mac connected" to t.ok
+        state == SupabaseRealtimeClient.State.CONNECTING -> "Connecting…" to t.warn
+        else -> "Reconnecting" to t.err
+    }
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            Modifier.size(38.dp).background(t.accent, RoundedCornerShape(12.dp)),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("w", fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, color = Color.White)
+        }
+        Text(
+            "wigly woo",
+            fontSize = 17.sp,
+            fontWeight = FontWeight.ExtraBold,
+            color = t.tx,
+            modifier = Modifier.padding(start = 10.dp)
+        )
+        Spacer(Modifier.weight(1f))
+        Row(
+            Modifier.heightIn(min = 48.dp).pressable(onStatusTap)
+                .background(t.surface, RoundedCornerShape(100))
+                .border(1.dp, t.hair, RoundedCornerShape(100))
+                .padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(7.dp)
+        ) {
+            StatusDot(color, 7.dp)
+            Text(status, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = t.tx2)
+        }
+    }
+}
+
+@Composable
+private fun V3PageHeader(eyebrow: String, title: String, subtitle: String) {
+    val t = LocalV2.current
+    Column {
+        Text(
+            eyebrow.uppercase(),
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 0.9.sp,
+            color = t.accent
+        )
+        Text(
+            title,
+            fontSize = 28.sp,
+            fontWeight = FontWeight.ExtraBold,
+            letterSpacing = (-0.6).sp,
+            color = t.tx,
+            modifier = Modifier.padding(top = 4.dp)
+        )
+        Text(
+            subtitle,
+            fontSize = 13.sp,
+            lineHeight = 18.sp,
+            color = t.tx2,
+            modifier = Modifier.padding(top = 4.dp)
+        )
+    }
+}
+
+@Composable
+private fun V3SectionHeader(title: String, detail: String? = null) {
+    val t = LocalV2.current
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(title, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = t.tx)
+        if (detail != null) {
+            Text(detail, fontSize = 11.sp, color = t.tx3, modifier = Modifier.padding(start = 8.dp))
+        }
+    }
+}
+
+@Composable
+private fun SendTabV3(
+    peers: List<PeerRow>,
+    transfer: TransferUi?,
+    files: List<File>,
+    companionOnline: Boolean,
+    onSendFile: (PeerRow) -> Unit,
+    onSendClipboard: () -> Unit,
+    onCancel: () -> Unit,
+    onOpenFile: (File) -> Unit,
+    onOpenInbox: () -> Unit,
+    onOpenCompanion: () -> Unit,
+) {
+    val t = LocalV2.current
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(20.dp)
+    ) {
+        V3PageHeader(
+            eyebrow = "Nearby sharing",
+            title = "Send a file",
+            subtitle = "Choose a nearby device. Files travel directly over your local network."
+        )
+
+        if (transfer != null) {
+            V3TransferCard(transfer, onCancel)
+        }
+
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            V3SectionHeader(
+                title = "Nearby devices",
+                detail = if (peers.isEmpty()) "Searching automatically" else "${peers.size} available"
+            )
+            if (peers.isEmpty()) {
+                V3DiscoveryCard()
+            } else {
+                peers.forEach { peer ->
+                    V3DeviceCard(peer = peer, onSendFile = { onSendFile(peer) })
+                }
+            }
+        }
+
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            V3SectionHeader("Quick actions")
+            V3QuickAction(
+                symbol = "⌘",
+                title = "Clipboard & keyboard",
+                detail = if (companionOnline)
+                    "Your Mac companion is connected and ready."
+                else
+                    "Connect your Mac to sync text and type remotely.",
+                action = if (companionOnline) "Send clipboard" else "Set up",
+                color = if (companionOnline) t.ok else t.accent,
+                onClick = if (companionOnline) onSendClipboard else onOpenCompanion
+            )
+            V3QuickAction(
+                symbol = "↓",
+                title = "Received files",
+                detail = if (files.isEmpty)
+                    "Files sent to this phone will appear in your inbox."
+                else
+                    "${files.size} ${if (files.size == 1) "file" else "files"} ready to open.",
+                action = "Open inbox",
+                color = t.accent,
+                onClick = onOpenInbox
+            )
+        }
+
+        if (files.isNotEmpty()) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                V3SectionHeader("Recent", "Last received")
+                files.take(3).forEach { file ->
+                    V3CompactFileRow(file = file, onOpen = { onOpenFile(file) })
+                }
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+    }
+}
+
+@Composable
+private fun V3DiscoveryCard() {
+    val t = LocalV2.current
+    val inf = rememberInfiniteTransition(label = "discovery")
+    val pulse by inf.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(1500), RepeatMode.Reverse),
+        label = "discoveryPulse"
+    )
+    Row(
+        Modifier.fillMaxWidth().modernCard(t).padding(18.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Box(Modifier.size(72.dp), contentAlignment = Alignment.Center) {
+            Box(
+                Modifier.size(72.dp).border(
+                    1.dp,
+                    t.accent.copy(alpha = pulse * 0.35f),
+                    CircleShape
+                )
+            )
+            Box(
+                Modifier.size(50.dp).background(t.accentSoft, CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("⌁", fontSize = 25.sp, fontWeight = FontWeight.Bold, color = t.accent)
+            }
+        }
+        Column(Modifier.weight(1f)) {
+            Text("Looking for your devices", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = t.tx)
+            Text(
+                "Open Wigly Woo on the other device and keep both devices on the same Wi‑Fi.",
+                fontSize = 12.sp,
+                lineHeight = 17.sp,
+                color = t.tx2,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+            Text(
+                "Only visible on your local network",
+                fontSize = 10.5.sp,
+                color = t.tx3,
+                modifier = Modifier.padding(top = 7.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun V3DeviceCard(peer: PeerRow, onSendFile: () -> Unit) {
+    val t = LocalV2.current
+    Row(
+        Modifier.fillMaxWidth().modernCard(t).padding(14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Box(
+            Modifier.size(48.dp).background(t.accentSoft, RoundedCornerShape(14.dp)),
+            contentAlignment = Alignment.Center
+        ) {
+            LaptopGlyph(color = t.accent, size = 24.dp)
+        }
+        Column(Modifier.weight(1f)) {
+            Text(
+                peer.name,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                color = t.tx,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.padding(top = 4.dp)
+            ) {
+                Box(Modifier.size(6.dp).background(t.ok, CircleShape))
+                Text("Nearby on Wi‑Fi", fontSize = 10.5.sp, color = t.tx3)
+            }
+        }
+        Text(
+            "Choose file",
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = Color.White,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.heightIn(min = 48.dp)
+                .background(t.accent, RoundedCornerShape(12.dp))
+                .pressable(onSendFile)
+                .padding(horizontal = 15.dp, vertical = 15.dp)
+        )
+    }
+}
+
+@Composable
+private fun V3QuickAction(
+    symbol: String,
+    title: String,
+    detail: String,
+    action: String,
+    color: Color,
+    onClick: () -> Unit,
+) {
+    val t = LocalV2.current
+    Row(
+        Modifier.fillMaxWidth().modernCard(t).heightIn(min = 82.dp)
+            .pressable(onClick).padding(14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Box(
+            Modifier.size(44.dp).background(color.copy(alpha = 0.12f), RoundedCornerShape(13.dp)),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(symbol, fontSize = 19.sp, fontWeight = FontWeight.Bold, color = color)
+        }
+        Column(Modifier.weight(1f)) {
+            Text(title, fontSize = 13.5.sp, fontWeight = FontWeight.Bold, color = t.tx)
+            Text(detail, fontSize = 11.sp, lineHeight = 15.sp, color = t.tx2,
+                modifier = Modifier.padding(top = 2.dp))
+        }
+        Text(action, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = color)
+    }
+}
+
+@Composable
+private fun V3TransferCard(transfer: TransferUi, onCancel: () -> Unit) {
+    val t = LocalV2.current
+    val progress = if (transfer.total > 0)
+        (transfer.sent.toFloat() / transfer.total.toFloat()).coerceIn(0f, 1f) else 0f
+    Column(Modifier.fillMaxWidth().modernCard(t).padding(16.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.size(38.dp).background(t.accentSoft, CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(if (transfer.dir == "send") "↑" else "↓",
+                    fontSize = 16.sp, fontWeight = FontWeight.Bold, color = t.accent)
+            }
+            Column(Modifier.weight(1f).padding(start = 11.dp)) {
+                Text(
+                    if (transfer.dir == "send") "Sending now" else "Receiving now",
+                    fontSize = 10.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = t.accent
+                )
+                Text(
+                    transfer.name,
+                    fontSize = 13.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = t.tx,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Text("${(progress * 100).toInt()}%",
+                fontSize = 14.sp, fontWeight = FontWeight.Bold, color = t.tx)
+            Text(
+                "Cancel",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = t.tx2,
+                modifier = Modifier.heightIn(min = 48.dp).pressable(onCancel)
+                    .padding(start = 12.dp, top = 16.dp, bottom = 16.dp)
+            )
+        }
+        Box(
+            Modifier.fillMaxWidth().height(6.dp).background(t.hair, RoundedCornerShape(100)),
+            contentAlignment = Alignment.CenterStart
+        ) {
+            Box(
+                Modifier.fillMaxHeight().fillMaxWidth(progress)
+                    .background(t.accent, RoundedCornerShape(100))
+            )
+        }
+        Row(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+            Text("${fmtBytes(transfer.sent)} of ${fmtBytes(transfer.total)}",
+                fontSize = 10.5.sp, color = t.tx3)
+            Spacer(Modifier.weight(1f))
+            Text(fmtSpeed(transfer.speed), fontSize = 10.5.sp, color = t.tx3)
+        }
+    }
+}
+
+@Composable
+private fun V3CompactFileRow(file: File, onOpen: () -> Unit) {
+    val t = LocalV2.current
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 64.dp).modernCard(t, 16.dp)
+            .pressable(onOpen).padding(horizontal = 13.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Box(
+            Modifier.size(40.dp).background(t.accentSoft, RoundedCornerShape(11.dp)),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(extOf(file.name), fontSize = 9.sp, fontWeight = FontWeight.Bold, color = t.accent)
+        }
+        Column(Modifier.weight(1f)) {
+            Text(file.name, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, color = t.tx,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("${fmtBytes(file.length())} · ${fmtDate(file.lastModified())}",
+                fontSize = 10.5.sp, color = t.tx3, modifier = Modifier.padding(top = 3.dp))
+        }
+        Text("Open", fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold, color = t.accent)
+    }
+}
+
+@Composable
+private fun InboxTabV3(
+    files: List<File>,
+    sessionTotal: Long,
+    onRefresh: () -> Unit,
+    onOpen: (File) -> Unit,
+    onShare: (File) -> Unit,
+) {
+    val t = LocalV2.current
+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp)) {
+        Row(verticalAlignment = Alignment.Bottom) {
+            Box(Modifier.weight(1f)) {
+                V3PageHeader(
+                    eyebrow = "Received",
+                    title = "Inbox",
+                    subtitle = if (files.isEmpty)
+                        "Files sent to this phone will appear here."
+                    else
+                        "${files.size} ${if (files.size == 1) "file" else "files"} saved on this phone."
+                )
+            }
+            Text(
+                "Refresh",
+                fontSize = 11.5.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = t.tx2,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.heightIn(min = 48.dp)
+                    .background(t.surface, RoundedCornerShape(100))
+                    .border(1.dp, t.hair, RoundedCornerShape(100))
+                    .pressable(onRefresh)
+                    .padding(horizontal = 14.dp, vertical = 15.dp)
+            )
+        }
+
+        Row(
+            Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            V3InfoChip("Files", "${files.size}", Modifier.weight(1f))
+            V3InfoChip("This session", fmtBytes(sessionTotal), Modifier.weight(1f))
+        }
+
+        if (files.isEmpty()) {
+            Column(
+                Modifier.fillMaxWidth().weight(1f).modernCard(t),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Box(
+                    Modifier.size(68.dp).background(t.accentSoft, CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("↓", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = t.accent)
+                }
+                Text("Your inbox is ready", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = t.tx,
+                    modifier = Modifier.padding(top = 14.dp))
+                Text(
+                    "Send something from your Mac and accept it here. It will be saved automatically.",
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp,
+                    textAlign = TextAlign.Center,
+                    color = t.tx2,
+                    modifier = Modifier.widthIn(max = 280.dp).padding(top = 5.dp)
+                )
+            }
+        } else {
+            LazyColumn(
+                Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = PaddingValues(bottom = 8.dp)
+            ) {
+                items(files) { file ->
+                    V3InboxFileRow(
+                        file = file,
+                        onOpen = { onOpen(file) },
+                        onShare = { onShare(file) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun V3InfoChip(label: String, value: String, modifier: Modifier = Modifier) {
+    val t = LocalV2.current
+    Row(
+        modifier.background(t.surface, RoundedCornerShape(13.dp))
+            .border(1.dp, t.hair, RoundedCornerShape(13.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, fontSize = 10.5.sp, color = t.tx3)
+        Spacer(Modifier.weight(1f))
+        Text(value, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = t.tx2)
+    }
+}
+
+@Composable
+private fun V3InboxFileRow(file: File, onOpen: () -> Unit, onShare: () -> Unit) {
+    val t = LocalV2.current
+    Row(
+        Modifier.fillMaxWidth().modernCard(t, 16.dp).padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(11.dp)
+    ) {
+        Box(
+            Modifier.size(44.dp).background(t.accentSoft, RoundedCornerShape(12.dp)),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(extOf(file.name), fontSize = 9.sp, fontWeight = FontWeight.Bold, color = t.accent)
+        }
+        Column(Modifier.weight(1f)) {
+            Text(file.name, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, color = t.tx,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("${fmtBytes(file.length())} · ${fmtDate(file.lastModified())}",
+                fontSize = 10.5.sp, color = t.tx3, modifier = Modifier.padding(top = 3.dp))
+        }
+        Text(
+            "Share",
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = t.tx2,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                .pressable(onShare).padding(vertical = 16.dp)
+        )
+        Text(
+            "Open",
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = Color.White,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.heightIn(min = 48.dp)
+                .background(t.accent, RoundedCornerShape(11.dp))
+                .pressable(onOpen)
+                .padding(horizontal = 13.dp, vertical = 16.dp)
+        )
+    }
+}
+
+@Composable
+private fun CompanionTabV3(
+    state: SupabaseRealtimeClient.State,
+    config: CompanionConfig,
+    notifAccess: Boolean,
+    kbEnabled: Boolean,
+    shizukuStatus: ShizukuClipboardBridge.Status,
+    onManage: () -> Unit,
+    onGrantNotif: () -> Unit,
+    onEnableKb: () -> Unit,
+    onShizukuAction: () -> Unit,
+    onPickKb: () -> Unit,
+    onToggleMirror: (Boolean) -> Unit,
+    onToggleClip: (Boolean) -> Unit,
+    onSendClipboard: () -> Unit,
+) {
+    val t = LocalV2.current
+    val online = config.enabled && config.isComplete &&
+        state == SupabaseRealtimeClient.State.CONNECTED
+
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        V3PageHeader(
+            eyebrow = "Across networks",
+            title = "Mac companion",
+            subtitle = "Sync notifications and clipboard, or type on this phone from your Mac."
+        )
+
+        V3CompanionHero(
+            state = state,
+            config = config,
+            onManage = onManage
+        )
+
+        val attentionCount = listOf(
+            config.enabled && config.notificationsEnabled && !notifAccess,
+            config.enabled && !kbEnabled,
+            config.enabled && config.clipboardEnabled &&
+                shizukuStatus != ShizukuClipboardBridge.Status.READY
+        ).count { it }
+
+        if (attentionCount > 0) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                V3SectionHeader("Needs attention", "$attentionCount ${if (attentionCount == 1) "step" else "steps"}")
+                if (config.enabled && config.notificationsEnabled && !notifAccess) {
+                    V3ActionNotice(
+                        title = "Allow notification access",
+                        detail = "Required to mirror Android notifications on your Mac.",
+                        action = "Allow",
+                        onClick = onGrantNotif
+                    )
+                }
+                if (config.enabled && !kbEnabled) {
+                    V3ActionNotice(
+                        title = "Enable Wigly Woo keyboard",
+                        detail = "Required before your Mac can type into Android apps.",
+                        action = "Enable",
+                        onClick = onEnableKb
+                    )
+                }
+                if (config.enabled && config.clipboardEnabled &&
+                    shizukuStatus != ShizukuClipboardBridge.Status.READY) {
+                    V3ActionNotice(
+                        title = when (shizukuStatus) {
+                            ShizukuClipboardBridge.Status.NOT_RUNNING -> "Start Shizuku"
+                            ShizukuClipboardBridge.Status.PERMISSION_REQUIRED -> "Allow Shizuku access"
+                            ShizukuClipboardBridge.Status.PERMISSION_BLOCKED -> "Shizuku access was denied"
+                            ShizukuClipboardBridge.Status.UNSUPPORTED -> "Update Shizuku"
+                            ShizukuClipboardBridge.Status.READY -> "Shizuku is ready"
+                        },
+                        detail = shizukuWarning(shizukuStatus),
+                        action = if (shizukuStatus == ShizukuClipboardBridge.Status.PERMISSION_REQUIRED ||
+                            shizukuStatus == ShizukuClipboardBridge.Status.PERMISSION_BLOCKED) "Allow" else "Open",
+                        onClick = onShizukuAction
+                    )
+                }
+            }
+        }
+
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            V3SectionHeader("Services", "Choose what stays in sync")
+            Column(Modifier.fillMaxWidth().modernCard(t)) {
+                V3ServiceRow(
+                    symbol = "●",
+                    title = "Notifications",
+                    detail = when {
+                        !config.notificationsEnabled -> "Turned off"
+                        !notifAccess -> "Permission needed"
+                        online -> "Mirroring to your Mac"
+                        else -> "Waiting for connection"
+                    },
+                    active = online && config.notificationsEnabled && notifAccess,
+                    checked = config.notificationsEnabled,
+                    onToggle = onToggleMirror
+                )
+                Box(Modifier.fillMaxWidth().height(1.dp).background(t.hair))
+                V3ServiceRow(
+                    symbol = "▣",
+                    title = "Clipboard",
+                    detail = when {
+                        !config.clipboardEnabled -> "Turned off"
+                        shizukuStatus != ShizukuClipboardBridge.Status.READY -> "Shizuku setup needed"
+                        online -> "Changes sync automatically"
+                        else -> "Waiting for connection"
+                    },
+                    active = online && config.clipboardEnabled &&
+                        shizukuStatus == ShizukuClipboardBridge.Status.READY,
+                    checked = config.clipboardEnabled,
+                    onToggle = onToggleClip
+                )
+                Box(Modifier.fillMaxWidth().height(1.dp).background(t.hair))
+                V3KeyboardServiceRow(
+                    active = online && kbEnabled,
+                    enabled = kbEnabled,
+                    onSelect = onPickKb
+                )
+            }
+        }
+
+        val clipReady = online && config.clipboardEnabled
+        Text(
+            if (clipReady) "Send clipboard to Mac" else "Clipboard unavailable",
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold,
+            color = if (clipReady) Color.White else t.tx3,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)
+                .background(if (clipReady) t.accent else t.chipBg, RoundedCornerShape(13.dp))
+                .pressable { if (clipReady) onSendClipboard() }
+                .padding(vertical = 17.dp)
+        )
+
+        Text(
+            "Connection settings",
+            fontSize = 12.5.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = t.accent,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                .pressable(onManage).padding(vertical = 15.dp)
+        )
+        Spacer(Modifier.height(4.dp))
+    }
+}
+
+@Composable
+private fun V3CompanionHero(
+    state: SupabaseRealtimeClient.State,
+    config: CompanionConfig,
+    onManage: () -> Unit,
+) {
+    val t = LocalV2.current
+    val values = when {
+        !config.isComplete -> arrayOf(
+            "Connect your Mac",
+            "Add the same relay details and pairing secret on both devices.",
+            "Set up",
+            "accent"
+        )
+        !config.enabled -> arrayOf(
+            "Companion is paused",
+            "Your pairing is saved. Turn it on whenever you need remote features.",
+            "Resume",
+            "neutral"
+        )
+        state == SupabaseRealtimeClient.State.CONNECTED -> arrayOf(
+            "Mac is connected",
+            "Your encrypted companion channel is ready.",
+            "Manage",
+            "success"
+        )
+        state == SupabaseRealtimeClient.State.CONNECTING -> arrayOf(
+            "Connecting to Mac…",
+            "Wigly Woo is opening the encrypted companion channel.",
+            "Check",
+            "warning"
+        )
+        else -> arrayOf(
+            "Reconnecting automatically",
+            "Nearby file sharing still works while the companion reconnects.",
+            "Check",
+            "danger"
+        )
+    }
+    val color = when (values[3]) {
+        "success" -> t.ok
+        "warning" -> t.warn
+        "danger" -> t.err
+        "neutral" -> t.tx3
+        else -> t.accent
+    }
+    Row(
+        Modifier.fillMaxWidth()
+            .background(color.copy(alpha = 0.10f), RoundedCornerShape(20.dp))
+            .border(1.dp, color.copy(alpha = 0.22f), RoundedCornerShape(20.dp))
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(13.dp)
+    ) {
+        Box(
+            Modifier.size(54.dp).background(color.copy(alpha = 0.12f), RoundedCornerShape(16.dp)),
+            contentAlignment = Alignment.Center
+        ) {
+            LaptopGlyph(color = color, size = 27.dp)
+        }
+        Column(Modifier.weight(1f)) {
+            Text(values[0], fontSize = 15.sp, fontWeight = FontWeight.Bold, color = t.tx)
+            Text(values[1], fontSize = 11.5.sp, lineHeight = 16.sp, color = t.tx2,
+                modifier = Modifier.padding(top = 3.dp))
+        }
+        Text(
+            values[2],
+            fontSize = 11.5.sp,
+            fontWeight = FontWeight.Bold,
+            color = Color.White,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.heightIn(min = 48.dp)
+                .background(color, RoundedCornerShape(11.dp))
+                .pressable(onManage)
+                .padding(horizontal = 13.dp, vertical = 16.dp)
+        )
+    }
+}
+
+@Composable
+private fun V3ActionNotice(
+    title: String,
+    detail: String,
+    action: String,
+    onClick: () -> Unit,
+) {
+    val t = LocalV2.current
+    Row(
+        Modifier.fillMaxWidth()
+            .background(t.warnBg, RoundedCornerShape(15.dp))
+            .border(1.dp, t.warnLine, RoundedCornerShape(15.dp))
+            .pressable(onClick)
+            .padding(13.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Box(Modifier.size(8.dp).background(t.warn, CircleShape))
+        Column(Modifier.weight(1f)) {
+            Text(title, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, color = t.tx)
+            Text(detail, fontSize = 10.5.sp, lineHeight = 15.sp, color = t.tx2,
+                modifier = Modifier.padding(top = 2.dp))
+        }
+        Text(action, fontSize = 11.5.sp, fontWeight = FontWeight.Bold, color = t.warn,
+            modifier = Modifier.heightIn(min = 48.dp).padding(vertical = 16.dp))
+    }
+}
+
+@Composable
+private fun V3ServiceRow(
+    symbol: String,
+    title: String,
+    detail: String,
+    active: Boolean,
+    checked: Boolean,
+    onToggle: (Boolean) -> Unit,
+) {
+    val t = LocalV2.current
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(11.dp)
+    ) {
+        Box(
+            Modifier.size(40.dp).background(
+                if (active) t.ok.copy(alpha = 0.12f) else t.inset,
+                RoundedCornerShape(12.dp)
+            ),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(symbol, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                color = if (active) t.ok else t.tx3)
+        }
+        Column(Modifier.weight(1f)) {
+            Text(title, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = t.tx)
+            Text(detail, fontSize = 10.5.sp, color = t.tx3, modifier = Modifier.padding(top = 2.dp))
+        }
+        V2Switch(checked, onToggle)
+    }
+}
+
+@Composable
+private fun V3KeyboardServiceRow(active: Boolean, enabled: Boolean, onSelect: () -> Unit) {
+    val t = LocalV2.current
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(11.dp)
+    ) {
+        Box(
+            Modifier.size(40.dp).background(
+                if (active) t.ok.copy(alpha = 0.12f) else t.inset,
+                RoundedCornerShape(12.dp)
+            ),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("⌨", fontSize = 16.sp, color = if (active) t.ok else t.tx3)
+        }
+        Column(Modifier.weight(1f)) {
+            Text("Remote keyboard", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = t.tx)
+            Text(
+                if (!enabled) "Enable the keyboard first"
+                else if (active) "Ready for Mac input" else "Waiting for connection",
+                fontSize = 10.5.sp,
+                color = t.tx3,
+                modifier = Modifier.padding(top = 2.dp)
+            )
+        }
+        Text(
+            "Select",
+            fontSize = 11.5.sp,
+            fontWeight = FontWeight.Bold,
+            color = t.accent,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.heightIn(min = 48.dp).pressable(onSelect)
+                .padding(horizontal = 8.dp, vertical = 16.dp)
+        )
+    }
+}
+
+@Composable
+private fun BottomNavV3(tab: Tab, onSelect: (Tab) -> Unit) {
+    val t = LocalV2.current
+    Row(
+        Modifier.fillMaxWidth().background(t.surface)
+            .border(1.dp, t.hair)
+            .navigationBarsPadding()
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Tab.entries.forEach { item ->
+            val selected = item == tab
+            Column(
+                Modifier.weight(1f).heightIn(min = 56.dp)
+                    .background(if (selected) t.accentSoft else Color.Transparent, RoundedCornerShape(14.dp))
+                    .pressable { onSelect(item) }
+                    .padding(vertical = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Box(
+                    Modifier.width(if (selected) 18.dp else 6.dp).height(3.dp)
+                        .background(if (selected) t.accent else t.tx3, RoundedCornerShape(100))
+                )
+                Text(
+                    item.name,
+                    fontSize = 11.5.sp,
+                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                    color = if (selected) t.accent else t.tx3,
+                    modifier = Modifier.padding(top = 5.dp)
+                )
+            }
+        }
+    }
 }
 
 // ═══ Space tab ═══════════════════════════════════════════════════════════════

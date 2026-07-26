@@ -103,7 +103,7 @@ private struct StatusDot: View {
 
 // MARK: - Root
 
-struct ContentView: View {
+struct LegacyContentView: View {
     @EnvironmentObject var core: CoreBridge
     @EnvironmentObject var companion: CompanionBridge
     @ObservedObject private var config = CompanionConfig.shared
@@ -810,7 +810,7 @@ private struct IncomingDropOverlay: View {
 
 // MARK: - Link setup sheet
 
-private struct LinkSetupSheet: View {
+struct LinkSetupSheet: View {
     let t: V2
     @ObservedObject private var config = CompanionConfig.shared
     @Environment(\.dismiss) private var dismiss
