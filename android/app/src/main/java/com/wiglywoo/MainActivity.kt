@@ -214,6 +214,8 @@ private fun ErrorScreen(message: String) {
 
 private enum class Tab { Space, Drops, Link }
 
+private const val SHIZUKU_MANAGER_PACKAGE = "moe.shizuku.privileged.api"
+
 @Composable
 private fun MainScreen() {
     val t = LocalV2.current
@@ -235,19 +237,42 @@ private fun MainScreen() {
     var companionState by remember { mutableStateOf(CompanionManager.state) }
     var config by remember { mutableStateOf(CompanionConfig.load(context)) }
     var orbMenuFor by remember { mutableStateOf<String?>(null) }
+    var dismissedShizukuStatus by remember { mutableStateOf<ShizukuClipboardBridge.Status?>(null) }
 
     // Re-checked whenever the app comes back to the foreground (permission screens etc.)
     var permTick by remember { mutableIntStateOf(0) }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val obs = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) permTick++
+            if (event == Lifecycle.Event.ON_RESUME) {
+                ShizukuClipboardBridge.refresh()
+                permTick++
+            }
         }
         lifecycleOwner.lifecycle.addObserver(obs)
         onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
     }
     val notifAccess = remember(permTick) { notificationAccessGranted(context) }
     val kbEnabled = remember(permTick) { wiglyKeyboardEnabled(context) }
+    val shizukuStatus = remember(permTick) { ShizukuClipboardBridge.status() }
+    val shizukuInstalled = remember(permTick) { shizukuInstalled(context) }
+
+    LaunchedEffect(shizukuStatus) {
+        if (shizukuStatus == ShizukuClipboardBridge.Status.READY) {
+            dismissedShizukuStatus = null
+        }
+    }
+
+    fun handleShizukuAction() {
+        when (shizukuStatus) {
+            ShizukuClipboardBridge.Status.PERMISSION_REQUIRED,
+            ShizukuClipboardBridge.Status.PERMISSION_BLOCKED -> {
+                if (!ShizukuClipboardBridge.requestAccess()) openShizuku(context)
+            }
+            ShizukuClipboardBridge.Status.READY -> Unit
+            else -> openShizuku(context)
+        }
+    }
 
     DisposableEffect(Unit) {
         val listener: (SupabaseRealtimeClient.State) -> Unit = { companionState = it }
@@ -347,9 +372,11 @@ private fun MainScreen() {
                     Tab.Link -> LinkTab(
                         state = companionState, config = config,
                         notifAccess = notifAccess, kbEnabled = kbEnabled,
+                        shizukuStatus = shizukuStatus,
                         onManage = { showSettings = true },
                         onGrantNotif = { context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) },
                         onEnableKb = { context.startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)) },
+                        onShizukuAction = { handleShizukuAction() },
                         onPickKb = {
                             (context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
                                 .showInputMethodPicker()
@@ -405,6 +432,24 @@ private fun MainScreen() {
                     }
                     showSettings = false
                 })
+        }
+
+        val showShizukuPrompt = config.enabled && config.clipboardEnabled &&
+            shizukuStatus != ShizukuClipboardBridge.Status.READY &&
+            dismissedShizukuStatus != shizukuStatus &&
+            trust == null && !showSettings
+
+        SheetScaffold(
+            visible = showShizukuPrompt,
+            dismissable = true,
+            onDismiss = { dismissedShizukuStatus = shizukuStatus }
+        ) {
+            ShizukuSetupSheet(
+                status = shizukuStatus,
+                installed = shizukuInstalled,
+                onDismiss = { dismissedShizukuStatus = shizukuStatus },
+                onAction = { handleShizukuAction() }
+            )
         }
     }
 }
@@ -795,9 +840,11 @@ private fun LinkTab(
     config: CompanionConfig,
     notifAccess: Boolean,
     kbEnabled: Boolean,
+    shizukuStatus: ShizukuClipboardBridge.Status,
     onManage: () -> Unit,
     onGrantNotif: () -> Unit,
     onEnableKb: () -> Unit,
+    onShizukuAction: () -> Unit,
     onPickKb: () -> Unit,
     onToggleMirror: (Boolean) -> Unit,
     onToggleClip: (Boolean) -> Unit,
@@ -841,6 +888,16 @@ private fun LinkTab(
         }
         if (config.enabled && !kbEnabled) {
             WarnBanner("The wigly-woo keyboard isn't enabled yet.", "Tap to enable.", onEnableKb)
+        }
+        if (config.enabled && config.clipboardEnabled &&
+            shizukuStatus != ShizukuClipboardBridge.Status.READY) {
+            WarnBanner(
+                body = shizukuWarning(shizukuStatus),
+                action = if (shizukuStatus == ShizukuClipboardBridge.Status.PERMISSION_REQUIRED ||
+                    shizukuStatus == ShizukuClipboardBridge.Status.PERMISSION_BLOCKED)
+                    "Allow access." else "Open Shizuku.",
+                onClick = onShizukuAction
+            )
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
@@ -1029,6 +1086,67 @@ private fun SheetScaffold(
                     content()
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun ShizukuSetupSheet(
+    status: ShizukuClipboardBridge.Status,
+    installed: Boolean,
+    onDismiss: () -> Unit,
+    onAction: () -> Unit,
+) {
+    val t = LocalV2.current
+    val title = when (status) {
+        ShizukuClipboardBridge.Status.NOT_RUNNING ->
+            if (installed) "Start Shizuku" else "Install Shizuku"
+        ShizukuClipboardBridge.Status.PERMISSION_REQUIRED -> "Allow Shizuku access"
+        ShizukuClipboardBridge.Status.PERMISSION_BLOCKED -> "Shizuku access was denied"
+        ShizukuClipboardBridge.Status.UNSUPPORTED -> "Update Shizuku"
+        ShizukuClipboardBridge.Status.READY -> "Shizuku is ready"
+    }
+    val body = when (status) {
+        ShizukuClipboardBridge.Status.NOT_RUNNING ->
+            if (installed)
+                "Open Shizuku, start its service, then return to Wigly Woo."
+            else
+                "Wigly Woo needs Shizuku for reliable background clipboard sync."
+        ShizukuClipboardBridge.Status.PERMISSION_REQUIRED ->
+            "Shizuku is running. Allow Wigly Woo access to enable background clipboard sync."
+        ShizukuClipboardBridge.Status.PERMISSION_BLOCKED ->
+            "Access was denied. Ask Shizuku again so Wigly Woo can sync the clipboard."
+        ShizukuClipboardBridge.Status.UNSUPPORTED ->
+            "This Shizuku version is too old. Update it before enabling clipboard sync."
+        ShizukuClipboardBridge.Status.READY ->
+            "Background clipboard sync is available."
+    }
+    val action = when (status) {
+        ShizukuClipboardBridge.Status.PERMISSION_REQUIRED,
+        ShizukuClipboardBridge.Status.PERMISSION_BLOCKED -> "Allow access"
+        ShizukuClipboardBridge.Status.NOT_RUNNING -> if (installed) "Open Shizuku" else "Get Shizuku"
+        else -> "Open Shizuku"
+    }
+
+    Column {
+        Text(title, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, color = t.tx)
+        Text(body, fontSize = 12.5.sp, color = t.tx2, lineHeight = 18.sp,
+            modifier = Modifier.padding(top = 6.dp))
+        Row(Modifier.fillMaxWidth().padding(top = 18.dp),
+            horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+            Text("Not now", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = t.tx2,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.weight(1f)
+                    .background(t.chipBg, RoundedCornerShape(100))
+                    .border(1.dp, t.hair, RoundedCornerShape(100))
+                    .pressable(onDismiss)
+                    .padding(vertical = 12.dp))
+            Text(action, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = t.onInk,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.weight(1f)
+                    .background(t.ink, RoundedCornerShape(100))
+                    .pressable(onAction)
+                    .padding(vertical = 12.dp))
         }
     }
 }
@@ -1246,6 +1364,30 @@ private fun PhoneGlyph(color: Color, size: androidx.compose.ui.unit.Dp) {
 
 private fun notificationAccessGranted(context: Context): Boolean =
     NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
+
+private fun shizukuInstalled(context: Context): Boolean =
+    context.packageManager.getLaunchIntentForPackage(SHIZUKU_MANAGER_PACKAGE) != null
+
+private fun openShizuku(context: Context) {
+    val launch = context.packageManager.getLaunchIntentForPackage(SHIZUKU_MANAGER_PACKAGE)
+    val intent = launch ?: Intent(
+        Intent.ACTION_VIEW,
+        Uri.parse("https://shizuku.rikka.app/download/")
+    )
+    runCatching {
+        context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }.onFailure {
+        Toast.makeText(context, "Unable to open Shizuku", Toast.LENGTH_SHORT).show()
+    }
+}
+
+private fun shizukuWarning(status: ShizukuClipboardBridge.Status): String = when (status) {
+    ShizukuClipboardBridge.Status.NOT_RUNNING -> "Shizuku isn't running — background clipboard sync is unavailable."
+    ShizukuClipboardBridge.Status.PERMISSION_REQUIRED -> "Shizuku is running — allow Wigly Woo access."
+    ShizukuClipboardBridge.Status.PERMISSION_BLOCKED -> "Shizuku access was denied — tap to ask again."
+    ShizukuClipboardBridge.Status.UNSUPPORTED -> "This Shizuku version is unsupported."
+    ShizukuClipboardBridge.Status.READY -> ""
+}
 
 // Settings.Secure.ENABLED_INPUT_METHODS throws SecurityException on targetSdk >= 34;
 // the InputMethodManager list is the public equivalent.

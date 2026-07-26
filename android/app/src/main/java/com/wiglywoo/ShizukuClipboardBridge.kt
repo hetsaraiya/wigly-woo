@@ -11,6 +11,14 @@ import rikka.shizuku.Shizuku
 
 /** Keeps an ordinary-copy clipboard watcher alive without replacing the user's keyboard. */
 object ShizukuClipboardBridge {
+    enum class Status {
+        NOT_RUNNING,
+        PERMISSION_REQUIRED,
+        PERMISSION_BLOCKED,
+        READY,
+        UNSUPPORTED,
+    }
+
     private const val REQUEST_CODE = 4817
     private val main = Handler(Looper.getMainLooper())
     private var initialized = false
@@ -57,12 +65,34 @@ object ShizukuClipboardBridge {
         ensurePermissionAndBind()
     }
 
+    fun status(): Status = runCatching {
+        when {
+            !Shizuku.pingBinder() -> Status.NOT_RUNNING
+            Shizuku.isPreV11() -> Status.UNSUPPORTED
+            Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED -> Status.READY
+            Shizuku.shouldShowRequestPermissionRationale() -> Status.PERMISSION_BLOCKED
+            else -> Status.PERMISSION_REQUIRED
+        }
+    }.getOrDefault(Status.NOT_RUNNING)
+
+    fun refresh() {
+        ensurePermissionAndBind()
+    }
+
+    /** Returns true when the Shizuku permission dialog was requested. */
+    fun requestAccess(): Boolean = runCatching {
+        if (status() !in setOf(Status.PERMISSION_REQUIRED, Status.PERMISSION_BLOCKED)) {
+            return@runCatching false
+        }
+        Shizuku.requestPermission(REQUEST_CODE)
+        true
+    }.getOrDefault(false)
+
     private fun ensurePermissionAndBind() {
         if (!Shizuku.pingBinder()) return
         when {
             Shizuku.isPreV11() -> return
             Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED -> bindService()
-            !Shizuku.shouldShowRequestPermissionRationale() -> Shizuku.requestPermission(REQUEST_CODE)
         }
     }
 
