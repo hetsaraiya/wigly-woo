@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Maps getExternalFilesDir(null)/incoming so received files can be shared
+         out via a content:// URI (their real path is unreachable to other apps). -->
+    <external-files-path name="incoming" path="incoming/" />
+</paths>

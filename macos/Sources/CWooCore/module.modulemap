@@ -1,0 +1,4 @@
+module CWooCore {
+    header "woocore.h"
+    export *
+}
