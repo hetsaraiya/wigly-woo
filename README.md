@@ -79,6 +79,15 @@ open dist/WiglyWoo.app
 
 Output: `macos/dist/WiglyWoo.app`
 
+Tagged releases are also available through the project Homebrew tap:
+
+```bash
+brew install --cask hetsaraiya/cask/wigly-woo
+```
+
+The free release build is ad-hoc signed rather than Apple-notarized. On first
+launch, macOS may require **System Settings → Privacy & Security → Open Anyway**.
+
 (A bundled `.app` with a code-signed UI is best produced by opening the package
 in Xcode; `swift build` is enough to compile and link against the core.)
 
@@ -111,6 +120,9 @@ export ANDROID_NDK_HOME=$HOME/Library/Android/sdk/ndk/<version>
 > Note: macOS/iOS cannot be containerized — Apple's toolchain only runs on
 > macOS. The Mac app builds locally with the Swift command-line tools (no full
 > Xcode needed), so there's nothing extra to install there either.
+
+Versioned, signed APKs are attached to each tagged
+[GitHub release](https://github.com/hetsaraiya/wigly-woo/releases).
 
 ## The FFI boundary
 

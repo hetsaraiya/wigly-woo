@@ -1,0 +1,202 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      version_code: ${{ steps.version.outputs.version_code }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        name: Validate release version
+        run: ./scripts/release-version.sh "$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: core/go.mod
+          cache-dependency-path: core/go.mod
+      - name: Test Go core
+        working-directory: core
+        run: go test ./...
+
+  macos:
+    needs: validate
+    strategy:
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: core/go.mod
+          cache-dependency-path: core/go.mod
+      - name: Build ad-hoc signed app
+        env:
+          WIGLY_VERSION_NAME: ${{ needs.validate.outputs.version }}
+          WIGLY_BUILD_NUMBER: ${{ needs.validate.outputs.version_code }}
+        run: ./macos/package-app.sh
+      - name: Package app
+        env:
+          TAG: ${{ needs.validate.outputs.tag }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          mkdir -p release
+          ditto -c -k --sequesterRsrc --keepParent \
+            macos/dist/WiglyWoo.app \
+            "release/WiglyWoo-${TAG}-macos-${ARCH}.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-macos-${{ matrix.arch }}
+          path: release/*
+          if-no-files-found: error
+
+  android:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: core/go.mod
+          cache-dependency-path: core/go.mod
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+      - name: Require Android signing secrets
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::$name is not configured"
+              exit 1
+            fi
+          done
+      - name: Install Android toolchain
+        run: sdkmanager "platforms;android-34" "build-tools;34.0.0" "cmake;3.22.1" "ndk;26.3.11579264"
+      - name: Build native core
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/26.3.11579264"
+          ./android/build-core.sh
+      - name: Decode release keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/wigly-woo-release.jks"
+          chmod 600 "$RUNNER_TEMP/wigly-woo-release.jks"
+      - name: Build signed release APK
+        env:
+          WIGLY_VERSION_NAME: ${{ needs.validate.outputs.version }}
+          WIGLY_VERSION_CODE: ${{ needs.validate.outputs.version_code }}
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/wigly-woo-release.jks
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: gradle --no-daemon -p android :app:assembleRelease
+      - name: Verify and name APK
+        env:
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          "$ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner" verify --verbose \
+            android/app/build/outputs/apk/release/app-release.apk
+          mkdir -p release
+          cp android/app/build/outputs/apk/release/app-release.apk \
+            "release/wigly-woo-${TAG}-android.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-android
+          path: release/*
+          if-no-files-found: error
+
+  publish:
+    needs: [validate, macos, android]
+    runs-on: macos-15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Create checksums
+        working-directory: dist
+        run: shasum -a 256 * > SHA256SUMS.txt
+      - name: Publish GitHub release
+        env:
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* \
+              --verify-tag \
+              --generate-notes \
+              --title "Wigly Woo $TAG"
+          fi
+      - name: Check Homebrew tap token
+        id: tap
+        run: |
+          if [ -n "$HOMEBREW_TAP_TOKEN" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::HOMEBREW_TAP_TOKEN is not set; skipping cask update"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.tap.outputs.enabled == 'true'
+        with:
+          repository: hetsaraiya/homebrew-cask
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-cask
+      - name: Update Homebrew cask
+        if: steps.tap.outputs.enabled == 'true'
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          arm_sha="$(shasum -a 256 "dist/WiglyWoo-${TAG}-macos-arm64.zip" | awk '{print $1}')"
+          intel_sha="$(shasum -a 256 "dist/WiglyWoo-${TAG}-macos-x86_64.zip" | awk '{print $1}')"
+          mkdir -p homebrew-cask/Casks
+          sed \
+            -e "s/__VERSION__/${VERSION}/g" \
+            -e "s/__ARM64_SHA256__/${arm_sha}/g" \
+            -e "s/__X86_64_SHA256__/${intel_sha}/g" \
+            packaging/homebrew/wigly-woo.rb > homebrew-cask/Casks/wigly-woo.rb
+          ruby -c homebrew-cask/Casks/wigly-woo.rb
+          cd homebrew-cask
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/wigly-woo.rb
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "Update wigly-woo to ${VERSION}"
+          git push

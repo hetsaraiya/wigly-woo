@@ -3,6 +3,13 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val wiglyVersionName = providers.environmentVariable("WIGLY_VERSION_NAME").orElse("0.1").get()
+val wiglyVersionCode = providers.environmentVariable("WIGLY_VERSION_CODE")
+    .map { it.toInt() }
+    .orElse(1)
+    .get()
+val releaseKeystorePath = providers.environmentVariable("ANDROID_KEYSTORE_PATH").orNull
+
 android {
     namespace = "com.wiglywoo"
     compileSdk = 34
@@ -14,8 +21,8 @@ android {
         applicationId = "com.wiglywoo"
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1"
+        versionCode = wiglyVersionCode
+        versionName = wiglyVersionName
 
         ndk {
             // Build the JNI shim for these ABIs; the Go .so must already exist
@@ -38,15 +45,35 @@ android {
     sourceSets["main"].jniLibs.srcDirs("src/main/jniLibs")
 
     signingConfigs {
-        create("persistentDebug") {
-            storeFile = rootProject.file("signing/wigly-debug.keystore")
-            storePassword = "wiglywoo-debug"
-            keyAlias = "wiglywoo"
-            keyPassword = "wiglywoo-debug"
+        val debugKeystore = rootProject.file("signing/wigly-debug.keystore")
+        if (debugKeystore.exists()) {
+            create("persistentDebug") {
+                storeFile = debugKeystore
+                storePassword = "wiglywoo-debug"
+                keyAlias = "wiglywoo"
+                keyPassword = "wiglywoo-debug"
+            }
+        }
+
+        if (releaseKeystorePath != null) {
+            create("release") {
+                storeFile = file(releaseKeystorePath)
+                storePassword = providers.environmentVariable("ANDROID_KEYSTORE_PASSWORD")
+                    .orNull ?: error("ANDROID_KEYSTORE_PASSWORD is required")
+                keyAlias = providers.environmentVariable("ANDROID_KEY_ALIAS")
+                    .orNull ?: error("ANDROID_KEY_ALIAS is required")
+                keyPassword = providers.environmentVariable("ANDROID_KEY_PASSWORD")
+                    .orNull ?: error("ANDROID_KEY_PASSWORD is required")
+            }
         }
     }
     buildTypes {
-        getByName("debug") { signingConfig = signingConfigs.getByName("persistentDebug") }
+        getByName("debug") {
+            signingConfigs.findByName("persistentDebug")?.let { signingConfig = it }
+        }
+        getByName("release") {
+            signingConfigs.findByName("release")?.let { signingConfig = it }
+        }
     }
 
     buildFeatures {
