@@ -189,9 +189,9 @@ jobs:
       - uses: actions/checkout@v4
         if: steps.tap.outputs.enabled == 'true'
         with:
-          repository: hetsaraiya/homebrew-cask
+          repository: hetsaraiya/homebrew-tap
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          path: homebrew-cask
+          path: homebrew-tap
       - name: Update Homebrew cask
         if: steps.tap.outputs.enabled == 'true'
         env:
@@ -200,14 +200,14 @@ jobs:
         run: |
           arm_sha="$(shasum -a 256 "dist/WiglyWoo-${TAG}-macos-arm64.zip" | awk '{print $1}')"
           intel_sha="$(shasum -a 256 "dist/WiglyWoo-${TAG}-macos-x86_64.zip" | awk '{print $1}')"
-          mkdir -p homebrew-cask/Casks
+          mkdir -p homebrew-tap/Casks
           sed \
             -e "s/__VERSION__/${VERSION}/g" \
             -e "s/__ARM64_SHA256__/${arm_sha}/g" \
             -e "s/__X86_64_SHA256__/${intel_sha}/g" \
-            packaging/homebrew/wigly-woo.rb > homebrew-cask/Casks/wigly-woo.rb
-          ruby -c homebrew-cask/Casks/wigly-woo.rb
-          cd homebrew-cask
+            packaging/homebrew/wigly-woo.rb > homebrew-tap/Casks/wigly-woo.rb
+          ruby -c homebrew-tap/Casks/wigly-woo.rb
+          cd homebrew-tap
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Casks/wigly-woo.rb

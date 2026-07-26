@@ -82,7 +82,7 @@ Output: `macos/dist/WiglyWoo.app`
 Tagged releases are also available through the project Homebrew tap:
 
 ```bash
-brew install --cask hetsaraiya/cask/wigly-woo
+brew install --cask hetsaraiya/tap/wigly-woo
 ```
 
 The free release build is ad-hoc signed rather than Apple-notarized. On first
