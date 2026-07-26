@@ -676,7 +676,7 @@ private fun SendTabV3(
             V3QuickAction(
                 symbol = "↓",
                 title = "Received files",
-                detail = if (files.isEmpty)
+                detail = if (files.isEmpty())
                     "Files sent to this phone will appear in your inbox."
                 else
                     "${files.size} ${if (files.size == 1) "file" else "files"} ready to open.",
@@ -923,7 +923,7 @@ private fun InboxTabV3(
                 V3PageHeader(
                     eyebrow = "Received",
                     title = "Inbox",
-                    subtitle = if (files.isEmpty)
+                    subtitle = if (files.isEmpty())
                         "Files sent to this phone will appear here."
                     else
                         "${files.size} ${if (files.size == 1) "file" else "files"} saved on this phone."
@@ -2125,40 +2125,135 @@ private fun LinkSetupSheet(
     val saveDisabled = enabled && !candidate.isComplete
 
     Column(Modifier.verticalScroll(rememberScrollState())) {
-        Text("Link setup", fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = (-0.3).sp, color = t.tx)
-        Text("Account-free testing mode. Everything stays on your devices — the pairing secret is the lock.",
-            fontSize = 11.5.sp, color = t.tx3, lineHeight = 16.sp, modifier = Modifier.padding(top = 3.dp))
-
-        SectionCaps("Relay", Modifier.padding(top = 18.dp, bottom = 7.dp))
-        V2Field(url, { url = it }, "Supabase project URL")
-        Spacer(Modifier.height(8.dp))
-        V2Field(key, { key = it }, "Publishable / anon key")
-
-        SectionCaps("Pairing secret", Modifier.padding(top = 16.dp, bottom = 7.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.weight(1f)) { V2Field(secret, { secret = it.trim() }, "Shared secret") }
-            Text("New", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = t.tx2,
-                modifier = Modifier
-                    .background(t.chipBg, RoundedCornerShape(13.dp))
-                    .border(1.dp, t.hair, RoundedCornerShape(13.dp))
-                    .pressable { secret = CompanionConfig.generateSecret() }
-                    .padding(horizontal = 15.dp, vertical = 14.dp))
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Box(
+                Modifier.size(46.dp).background(t.accentSoft, RoundedCornerShape(14.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("↔", fontSize = 19.sp, fontWeight = FontWeight.Bold, color = t.accent)
+            }
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Connect your Mac",
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = (-0.3).sp,
+                    color = t.tx
+                )
+                Text(
+                    "Use the same relay details and pairing secret on both devices.",
+                    fontSize = 11.5.sp,
+                    color = t.tx2,
+                    lineHeight = 16.sp,
+                    modifier = Modifier.padding(top = 3.dp)
+                )
+            }
         }
 
-        SectionCaps("Behavior", Modifier.padding(top = 16.dp, bottom = 4.dp))
-        BehaviorRow("Keep the link alive in the background", enabled) { enabled = it }
-        BehaviorRow("Mirror notifications", notifications) { notifications = it }
-        BehaviorRow("Sync clipboard", clipboard) { clipboard = it }
+        V3SetupStep(
+            number = "1",
+            title = "Relay details",
+            detail = "Your Supabase project carries encrypted companion messages."
+        ) {
+            V3LabeledField(
+                label = "Project URL",
+                value = url,
+                onChange = { url = it },
+                placeholder = "https://your-project.supabase.co"
+            )
+            Spacer(Modifier.height(9.dp))
+            V3LabeledField(
+                label = "Publishable key",
+                value = key,
+                onChange = { key = it },
+                placeholder = "Supabase publishable / anon key"
+            )
+        }
 
-        SectionCaps("Permissions", Modifier.padding(top = 14.dp, bottom = 7.dp))
-        Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-            PermButton(if (notifAccess) "Notification access — granted" else "Grant notification access", onGrantNotif)
-            PermButton(if (kbEnabled) "Keyboard — enabled" else "Enable keyboard", onEnableKb)
-            PermButton("Select wigly-woo keyboard", onPickKb)
+        V3SetupStep(
+            number = "2",
+            title = "Pairing secret",
+            detail = "This is the private password for your devices. Keep it out of screenshots and chat."
+        ) {
+            V3LabeledField(
+                label = "Shared secret",
+                value = secret,
+                onChange = { secret = it.trim() },
+                placeholder = "At least 20 characters"
+            )
+            Text(
+                "Generate a new secret",
+                fontSize = 11.5.sp,
+                fontWeight = FontWeight.Bold,
+                color = t.accent,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                    .pressable { secret = CompanionConfig.generateSecret() }
+                    .padding(vertical = 16.dp)
+            )
+        }
+
+        V3SetupStep(
+            number = "3",
+            title = "Choose what stays connected",
+            detail = "You can change these later from the Companion screen."
+        ) {
+            Column(
+                Modifier.fillMaxWidth().background(t.inset, RoundedCornerShape(14.dp))
+                    .border(1.dp, t.hair, RoundedCornerShape(14.dp))
+            ) {
+                V3SetupToggle(
+                    title = "Keep companion connected",
+                    detail = "Maintain the encrypted link in the background",
+                    checked = enabled,
+                    onToggle = { enabled = it }
+                )
+                Box(Modifier.fillMaxWidth().height(1.dp).background(t.hair))
+                V3SetupToggle(
+                    title = "Android notifications",
+                    detail = "Show phone notifications on your Mac",
+                    checked = notifications,
+                    onToggle = { notifications = it }
+                )
+                Box(Modifier.fillMaxWidth().height(1.dp).background(t.hair))
+                V3SetupToggle(
+                    title = "Clipboard sync",
+                    detail = "Keep copied text available on both devices",
+                    checked = clipboard,
+                    onToggle = { clipboard = it }
+                )
+            }
+        }
+
+        V3SetupStep(
+            number = "4",
+            title = "Finish Android setup",
+            detail = "These system permissions make the companion features work."
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                V3PermissionRow(
+                    title = "Notification access",
+                    ready = notifAccess,
+                    action = if (notifAccess) "Granted" else "Allow",
+                    onClick = onGrantNotif
+                )
+                V3PermissionRow(
+                    title = "Wigly Woo keyboard",
+                    ready = kbEnabled,
+                    action = if (kbEnabled) "Enabled" else "Enable",
+                    onClick = onEnableKb
+                )
+                V3PermissionRow(
+                    title = "Active keyboard",
+                    ready = false,
+                    action = "Select",
+                    onClick = onPickKb
+                )
+            }
         }
 
         if (saveDisabled) {
-            Text("The link is on but details are incomplete — fill in all three fields to save.",
+            Text("Finish the relay URL, publishable key, and pairing secret before turning the companion on.",
                 fontSize = 11.5.sp, color = t.tx2, lineHeight = 16.sp,
                 modifier = Modifier.fillMaxWidth().padding(top = 12.dp)
                     .background(t.warnBg, RoundedCornerShape(13.dp))
@@ -2167,20 +2262,108 @@ private fun LinkSetupSheet(
         }
 
         Row(Modifier.fillMaxWidth().padding(top = 16.dp), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-            Text("Cancel", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = t.tx2,
+            Text("Cancel", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = t.tx2,
                 textAlign = TextAlign.Center,
-                modifier = Modifier.weight(1f)
-                    .background(t.chipBg, RoundedCornerShape(100))
-                    .border(1.dp, t.hair, RoundedCornerShape(100))
+                modifier = Modifier.weight(0.7f).heightIn(min = 52.dp)
+                    .background(t.inset, RoundedCornerShape(13.dp))
+                    .border(1.dp, t.hair, RoundedCornerShape(13.dp))
                     .pressable(onDismiss)
-                    .padding(vertical = 12.dp))
-            Text("Save", fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-                color = if (saveDisabled) t.tx3 else t.onInk, textAlign = TextAlign.Center,
-                modifier = Modifier.weight(1f)
-                    .background(if (saveDisabled) t.chipBg else t.ink, RoundedCornerShape(100))
+                    .padding(vertical = 17.dp))
+            Text("Save connection", fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                color = if (saveDisabled) t.tx3 else Color.White, textAlign = TextAlign.Center,
+                modifier = Modifier.weight(1.3f).heightIn(min = 52.dp)
+                    .background(if (saveDisabled) t.chipBg else t.accent, RoundedCornerShape(13.dp))
                     .pressable { if (!saveDisabled) onSave(candidate) }
-                    .padding(vertical = 12.dp))
+                    .padding(vertical = 17.dp))
         }
+    }
+}
+
+@Composable
+private fun V3SetupStep(
+    number: String,
+    title: String,
+    detail: String,
+    content: @Composable () -> Unit,
+) {
+    val t = LocalV2.current
+    Row(
+        Modifier.fillMaxWidth().padding(top = 20.dp),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(11.dp)
+    ) {
+        Box(
+            Modifier.size(28.dp).background(t.accentSoft, CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(number, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = t.accent)
+        }
+        Column(Modifier.weight(1f)) {
+            Text(title, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = t.tx)
+            Text(detail, fontSize = 10.5.sp, lineHeight = 15.sp, color = t.tx3,
+                modifier = Modifier.padding(top = 2.dp, bottom = 9.dp))
+            content()
+        }
+    }
+}
+
+@Composable
+private fun V3LabeledField(
+    label: String,
+    value: String,
+    onChange: (String) -> Unit,
+    placeholder: String,
+) {
+    val t = LocalV2.current
+    Column {
+        Text(label, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, color = t.tx2,
+            modifier = Modifier.padding(bottom = 5.dp))
+        V2Field(value, onChange, placeholder)
+    }
+}
+
+@Composable
+private fun V3SetupToggle(
+    title: String,
+    detail: String,
+    checked: Boolean,
+    onToggle: (Boolean) -> Unit,
+) {
+    val t = LocalV2.current
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, color = t.tx)
+            Text(detail, fontSize = 10.sp, color = t.tx3, modifier = Modifier.padding(top = 2.dp))
+        }
+        V2Switch(checked, onToggle)
+    }
+}
+
+@Composable
+private fun V3PermissionRow(
+    title: String,
+    ready: Boolean,
+    action: String,
+    onClick: () -> Unit,
+) {
+    val t = LocalV2.current
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 52.dp)
+            .background(t.inset, RoundedCornerShape(13.dp))
+            .border(1.dp, t.hair, RoundedCornerShape(13.dp))
+            .pressable(onClick)
+            .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(Modifier.size(7.dp).background(if (ready) t.ok else t.warn, CircleShape))
+        Text(title, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = t.tx,
+            modifier = Modifier.weight(1f).padding(start = 9.dp))
+        Text(action, fontSize = 11.5.sp, fontWeight = FontWeight.Bold,
+            color = if (ready) t.ok else t.accent)
     }
 }
 

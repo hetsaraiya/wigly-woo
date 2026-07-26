@@ -6,13 +6,14 @@
     <key>CFBundleExecutable</key><string>WiglyWoo</string>
     <key>CFBundleIdentifier</key><string>com.wiglywoo.macos</string>
     <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-    <key>CFBundleName</key><string>wigly-woo</string>
-    <key>CFBundleDisplayName</key><string>wigly-woo</string>
+    <key>CFBundleName</key><string>Wigly Woo</string>
+    <key>CFBundleDisplayName</key><string>Wigly Woo</string>
+    <key>CFBundleIconFile</key><string>WiglyWoo.icns</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>0.2.0</string>
     <key>CFBundleVersion</key><string>2</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>NSHighResolutionCapable</key><true/>
-    <key>NSBluetoothAlwaysUsageDescription</key><string>wigly-woo uses Bluetooth for nearby companion discovery and transfers.</string>
+    <key>NSBluetoothAlwaysUsageDescription</key><string>Wigly Woo uses Bluetooth for nearby companion discovery and transfers.</string>
 </dict>
 </plist>

@@ -6,7 +6,7 @@ struct WiglyWooApp: App {
     @StateObject private var companion = CompanionBridge.shared
 
     var body: some Scene {
-        WindowGroup("wigly-woo") {
+        WindowGroup("Wigly Woo") {
             ContentView()
                 .environmentObject(core)
                 .environmentObject(companion)
