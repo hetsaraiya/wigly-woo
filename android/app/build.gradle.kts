@@ -69,7 +69,8 @@ android {
     }
     buildTypes {
         getByName("debug") {
-            signingConfigs.findByName("persistentDebug")?.let { signingConfig = it }
+            signingConfigs.findByName("release")?.let { signingConfig = it }
+                ?: signingConfigs.findByName("persistentDebug")?.let { signingConfig = it }
         }
         getByName("release") {
             signingConfigs.findByName("release")?.let { signingConfig = it }
