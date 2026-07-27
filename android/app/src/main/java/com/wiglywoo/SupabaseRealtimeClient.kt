@@ -2,6 +2,7 @@ package com.wiglywoo
 
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -16,6 +17,9 @@ class SupabaseRealtimeClient(
     private val onState: (State) -> Unit,
     private val onEnvelope: (JSONObject) -> Unit,
 ) {
+    private companion object {
+        const val TAG = "WiglyRealtime"
+    }
     enum class State { OFF, CONNECTING, CONNECTED, ERROR }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -72,6 +76,7 @@ class SupabaseRealtimeClient(
 
         override fun onMessage(webSocket: WebSocket, text: String) {
             val obj = runCatching { JSONObject(text) }.getOrNull() ?: return
+            Log.d(TAG, "Message event=${obj.optString("event")}")
             when (obj.optString("event")) {
                 "phx_reply" -> if (obj.optJSONObject("payload")?.optString("status") == "ok") {
                     attempt = 0
@@ -91,6 +96,7 @@ class SupabaseRealtimeClient(
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
             if (!stopped) {
+                Log.w(TAG, "WebSocket failure: ${t.javaClass.simpleName}")
                 onState(State.ERROR)
                 reconnect()
             }

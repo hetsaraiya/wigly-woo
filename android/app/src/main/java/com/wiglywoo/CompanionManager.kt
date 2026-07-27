@@ -5,10 +5,12 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import org.json.JSONObject
 import java.util.concurrent.CopyOnWriteArraySet
 
 object CompanionManager {
+    private const val TAG = "WiglyCompanion"
     private lateinit var app: Context
     private var client: SupabaseRealtimeClient? = null
     private var config = CompanionConfig()
@@ -77,9 +79,14 @@ object CompanionManager {
     fun removeMessageListener(listener: (JSONObject) -> Unit) { messageListeners -= listener }
 
     fun send(message: JSONObject): Boolean {
-        if (state != SupabaseRealtimeClient.State.CONNECTED || !config.isComplete) return false
+        if (state != SupabaseRealtimeClient.State.CONNECTED || !config.isComplete) {
+            Log.w(TAG, "Dropping ${message.optString("type")}: state=$state complete=${config.isComplete}")
+            return false
+        }
         message.put("sentAt", System.currentTimeMillis())
-        return client?.broadcast(CompanionCrypto.encrypt(message, config.pairingSecret, deviceId)) == true
+        val accepted = client?.broadcast(CompanionCrypto.encrypt(message, config.pairingSecret, deviceId)) == true
+        Log.i(TAG, "Broadcast ${message.optString("type")}: accepted=$accepted")
+        return accepted
     }
 
     fun sendCurrentClipboard(): Boolean {
@@ -108,7 +115,11 @@ object CompanionManager {
     }
 
     fun sendTextToMac(text: String): Boolean {
-        if (text.isEmpty()) return false
+        if (text.isEmpty()) {
+            Log.w(TAG, "Clipboard share ignored: empty text")
+            return false
+        }
+        Log.i(TAG, "Clipboard share requested: chars=${text.length} state=$state")
         pendingClipboardId = java.util.UUID.randomUUID().toString()
         pendingClipboardText = text.take(65_536)
         pendingClipboardLastSent = 0L
@@ -136,6 +147,7 @@ object CompanionManager {
     private fun receiveEnvelope(envelope: JSONObject) {
         if (envelope.optString("sender") == deviceId) return
         val message = CompanionCrypto.decrypt(envelope, config.pairingSecret) ?: return
+        Log.i(TAG, "Received ${message.optString("type")}")
         if (message.optString("type") == "clipboard_ack") {
             if (message.optString("clipboardID") == pendingClipboardId) {
                 pendingClipboardId = null
@@ -181,6 +193,7 @@ object CompanionManager {
 
     private fun updateState(newState: SupabaseRealtimeClient.State) {
         state = newState
+        Log.i(TAG, "Realtime state=$newState")
         main.post {
             stateListeners.forEach { it(newState) }
             if (newState == SupabaseRealtimeClient.State.CONNECTED && pendingClipboardId != null) {
