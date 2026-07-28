@@ -1,30 +1,41 @@
-# wigly-woo
+<div align="center">
+  <img src="./assets/brand/wigly-woo-icon.svg" alt="Wigly Woo logo" width="180">
 
-Fast, nearby file transfer — no shared Wi-Fi required, no accounts, no cloud.
-LocalSend-style, built as **one shared Go core** with **thin native shells**.
+  # Wigly Woo
 
-```
-              macOS (SwiftUI)        Android (Compose)
-                    │                       │
-                    │  C ABI (woocore.h)    │  JNI shim → C ABI
-                    └──────────┬────────────┘
-                               │
-                      ┌────────▼─────────┐
-                      │   Go core (one   │   discovery · transfer
-                      │   static lib)    │   crypto · link strategy
-                      └────────┬─────────┘
-                               │
-                Link Manager fallback chain (first that connects wins)
-                  1. Same LAN   2. Phone hotspot   3. Wi-Fi Direct
-                               │
-                Transfer path — raw TCP + TLS, chunked, fingerprint-pinned
+  **Fast, nearby file transfer with one shared Go core and thin native shells.**
+
+  No accounts. No cloud. No shared Wi-Fi required.
+
+  [Portfolio](https://hetsaraiya.com/projects/wigly-woo) ·
+  [Releases](https://github.com/hetsaraiya/wigly-woo/releases)
+</div>
+
+## Overview
+
+Wigly Woo is a LocalSend-style file transfer app for macOS and Android. Its
+native SwiftUI and Compose shells handle interface and platform-specific radio
+controls, while discovery, trust, encryption, and transfer logic live once in
+Go.
+
+```mermaid
+flowchart TB
+    Mac["macOS · SwiftUI"] -->|"C ABI"| Core["Shared Go core"]
+    Android["Android · Compose"] -->|"JNI → C ABI"| Core
+    Core --> Discovery["Peer discovery"]
+    Core --> Trust["TOFU fingerprint trust"]
+    Core --> Transfer["Chunked TCP + TLS transfer"]
+    Core --> Link["Link manager"]
+    Link --> LAN["Same LAN"]
+    Link --> Hotspot["Phone hotspot · Phase 2"]
+    Link --> Direct["Wi-Fi Direct · Phase 2"]
 ```
 
 The shells only draw UI and pull OS-specific radio levers; **all protocol logic
 lives once in Go**. The transfer layer runs identically regardless of how the
 two devices reached a shared subnet — that decoupling is the whole design.
 
-## Layout
+## Repository layout
 
 | Path | What | Builds here? |
 |------|------|--------------|
@@ -34,7 +45,7 @@ two devices reached a shared subnet — that decoupling is the whole design.
 
 ## Status
 
-**Phase 1 (this scaffold):** same-LAN discovery (UDP multicast beacon) +
+**Phase 1:** same-LAN discovery (UDP multicast beacon) +
 TLS file transfer with trust-on-first-use fingerprints. Verified end-to-end via
 the CLI (`core/cmd/woo`). Phone-hotspot and Wi-Fi Direct are stubbed behind the
 link-strategy interface (the "radio levers" each shell fulfills) — that's Phase 2.
@@ -137,3 +148,27 @@ full contract. In short:
 
 macOS links the static archive directly via a module map; Android loads the
 `.so` and reaches it through `woo_jni.c`.
+
+## Security model
+
+- File transfers use TLS over a direct TCP connection.
+- Trust-on-first-use fingerprints let users approve a device before transfer.
+- Protocol and trust decisions live in the shared core on both platforms.
+- The optional remote companion encrypts payloads before they reach Supabase;
+  review [`supabase/README.md`](./supabase/README.md) before enabling it.
+
+## Development
+
+Run the Go core tests:
+
+```bash
+cd core
+go test ./...
+```
+
+Build both native shells after changing the C ABI to catch integration drift.
+Keep `core/ffi/woocore.h`, the Swift bindings, and the JNI shim synchronized.
+
+## License
+
+Wigly Woo is available under the [MIT License](./LICENSE).
