@@ -148,7 +148,14 @@ object CompanionManager {
         if (envelope.optString("sender") == deviceId) return
         val message = CompanionCrypto.decrypt(envelope, config.pairingSecret) ?: return
         Log.i(TAG, "Received ${message.optString("type")}")
-        if (message.optString("type") == "clipboard_ack") {
+        if (message.optString("type") == "hello") {
+            val name = message.optString("name")
+            if (name.isNotEmpty() && name != config.peerName) {
+                config = config.copy(peerName = name)
+                CompanionConfig.save(app, config)
+            }
+            if (!message.optBoolean("reply")) sendHello(reply = true)
+        } else if (message.optString("type") == "clipboard_ack") {
             if (message.optString("clipboardID") == pendingClipboardId) {
                 pendingClipboardId = null
                 pendingClipboardText = null
@@ -178,6 +185,14 @@ object CompanionManager {
         messageListeners.forEach { it(message) }
     }
 
+    private fun sendHello(reply: Boolean) {
+        send(JSONObject().put("type", "hello").put("name", android.os.Build.MODEL ?: "Android")
+            .put("kind", "android").put("reply", reply))
+    }
+
+    /** The Mac name as last announced, for UI copy. */
+    val peerName: String get() = config.peerName
+
     private fun ensureClipboardListener() {
         if (clipboardRegistered) return
         val clipboard = app.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -196,6 +211,7 @@ object CompanionManager {
         Log.i(TAG, "Realtime state=$newState")
         main.post {
             stateListeners.forEach { it(newState) }
+            if (newState == SupabaseRealtimeClient.State.CONNECTED) sendHello(reply = false)
             if (newState == SupabaseRealtimeClient.State.CONNECTED && pendingClipboardId != null) {
                 // Flush anything that was pending across the reconnect.
                 pendingClipboardLastSent = 0L

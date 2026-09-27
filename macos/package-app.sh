@@ -26,6 +26,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN_DIR/WiglyWoo" "$APP/Contents/MacOS/WiglyWoo"
 cp "$ROOT/Info.plist" "$APP/Contents/Info.plist"
 cp "$ROOT/Resources/WiglyWoo.icns" "$APP/Contents/Resources/WiglyWoo.icns"
+cp -R "$ROOT/Resources/Fonts" "$APP/Contents/Resources/Fonts"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$APP/Contents/Info.plist"
 

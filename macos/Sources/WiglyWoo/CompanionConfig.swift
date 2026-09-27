@@ -10,6 +10,8 @@ final class CompanionConfig: ObservableObject {
     @Published var enabled: Bool
     @Published var notificationsEnabled: Bool
     @Published var clipboardEnabled: Bool
+    /// Name the paired phone announced over the channel ("Pixel 8").
+    @Published var peerName: String
 
     let deviceID: String
     private let defaults = UserDefaults.standard
@@ -21,6 +23,7 @@ final class CompanionConfig: ObservableObject {
         enabled = defaults.bool(forKey: "companion.enabled")
         notificationsEnabled = defaults.object(forKey: "companion.notifications") as? Bool ?? true
         clipboardEnabled = defaults.object(forKey: "companion.clipboard") as? Bool ?? true
+        peerName = defaults.string(forKey: "companion.peerName") ?? ""
         if let existing = defaults.string(forKey: "companion.deviceID") {
             deviceID = existing
         } else {
@@ -51,7 +54,50 @@ final class CompanionConfig: ObservableObject {
         defaults.set(enabled, forKey: "companion.enabled")
         defaults.set(notificationsEnabled, forKey: "companion.notifications")
         defaults.set(clipboardEnabled, forKey: "companion.clipboard")
+        defaults.set(peerName, forKey: "companion.peerName")
         CompanionBridge.shared.reconfigure()
+    }
+
+    var hasRelay: Bool {
+        normalizedURL.hasPrefix("https://") && !publishableKey.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    /// Six digits both devices derive from the shared secret, shown side by
+    /// side so the person can confirm they paired the right pair.
+    var pairingCode: String {
+        let digest = Array(SHA256.hash(data: Data("wigly-pair-v1|\(pairingSecret)".utf8)))
+        let n = digest.prefix(4).reduce(UInt32(0)) { $0 << 8 | UInt32($1) } % 1_000_000
+        let s = String(format: "%06d", n)
+        return "\(s.prefix(3)) \(s.suffix(3))"
+    }
+
+    /// What the phone scans: the relay details plus the secret.
+    func pairingURL(macName: String) -> String {
+        var c = URLComponents()
+        c.scheme = "wiglywoo"
+        c.host = "pair"
+        c.queryItems = [
+            URLQueryItem(name: "u", value: normalizedURL),
+            URLQueryItem(name: "k", value: publishableKey.trimmingCharacters(in: .whitespacesAndNewlines)),
+            URLQueryItem(name: "s", value: pairingSecret),
+            URLQueryItem(name: "n", value: macName),
+        ]
+        return c.string ?? ""
+    }
+
+    /// Persists the announced phone name without reconnecting.
+    func rememberPeer(_ name: String) {
+        peerName = name
+        defaults.set(name, forKey: "companion.peerName")
+    }
+
+    var phoneName: String { peerName.isEmpty ? "your phone" : peerName }
+
+    func unpair() {
+        pairingSecret = ""
+        peerName = ""
+        enabled = false
+        save()
     }
 
     func generateSecret() {

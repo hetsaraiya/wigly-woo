@@ -2,12 +2,28 @@ import Foundation
 import AppKit
 import UserNotifications
 
+enum CompanionStatus { case notSet, paused, connecting, connected, error, offline }
+
 final class CompanionBridge: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
     static let shared = CompanionBridge()
 
     @Published private(set) var state: SupabaseRealtimeClient.State = .off
-    @Published private(set) var lastActivity = "Not configured"
+    @Published private(set) var lastActivity = "No activity yet."
     @Published private(set) var notificationsAuthorized = false
+    /// Bumped whenever the phone announces itself; the pairing dialog waits on it.
+    @Published private(set) var helloCount = 0
+    @Published private(set) var connectedSince: Date?
+
+    var status: CompanionStatus {
+        if !config.isComplete { return .notSet }
+        if !config.enabled { return .paused }
+        switch state {
+        case .connected: return .connected
+        case .connecting: return .connecting
+        case .error: return .error
+        case .off: return .offline
+        }
+    }
 
     private let config = CompanionConfig.shared
     private var client: SupabaseRealtimeClient?
@@ -38,24 +54,23 @@ final class CompanionBridge: NSObject, ObservableObject, UNUserNotificationCente
         client = nil
         guard config.enabled, config.isComplete else {
             state = .off
-            lastActivity = config.isComplete ? "Remote companion paused" : "Finish remote setup"
+            connectedSince = nil
             stopNapProtection()
             return
         }
         startNapProtection()
         let realtime = SupabaseRealtimeClient(config: config)
         realtime.onState = { [weak self] newState in
-            self?.state = newState
+            guard let self else { return }
+            self.state = newState
             if newState == .connected {
                 // Flush anything that was pending across the reconnect.
-                self?.pendingClipboardRetryInterval = 2
-                self?.pendingClipboardLastSent = .distantPast
-            }
-            switch newState {
-            case .connected: self?.lastActivity = "Encrypted remote connection is ready"
-            case .connecting: self?.lastActivity = "Connecting to Supabase…"
-            case .error: self?.lastActivity = "Reconnecting…"
-            case .off: self?.lastActivity = "Remote companion paused"
+                self.pendingClipboardRetryInterval = 2
+                self.pendingClipboardLastSent = .distantPast
+                if self.connectedSince == nil { self.connectedSince = Date() }
+                self.sendHello(reply: false)
+            } else if newState != .connecting {
+                self.connectedSince = nil
             }
         }
         realtime.onEnvelope = { [weak self] envelope in self?.receive(envelope) }
@@ -66,11 +81,34 @@ final class CompanionBridge: NSObject, ObservableObject, UNUserNotificationCente
     func sendKeyboardText(_ text: String) {
         guard !text.isEmpty else { return }
         send(["type": "keyboard", "action": "insert", "text": text])
-        lastActivity = "Sent text to Android"
+        lastActivity = "Sent text to \(config.phoneName)."
     }
 
-    func sendBackspace() { send(["type": "keyboard", "action": "delete"]) }
-    func sendEnter() { send(["type": "keyboard", "action": "enter"]) }
+    func sendBackspace() {
+        send(["type": "keyboard", "action": "delete"])
+        lastActivity = "Sent Backspace to \(config.phoneName)."
+    }
+
+    func sendEnter() {
+        send(["type": "keyboard", "action": "enter"])
+        lastActivity = "Sent Enter to \(config.phoneName)."
+    }
+
+    /// Pushes the current Mac clipboard now, from the menu bar extra.
+    @discardableResult
+    func sendClipboardNow() -> Bool {
+        guard let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else { return false }
+        pendingClipboardID = UUID().uuidString
+        pendingClipboardText = String(text.prefix(65_536))
+        pendingClipboardRetryInterval = 2
+        pendingClipboardLastSent = .distantPast
+        sendPendingClipboard()
+        return state == .connected
+    }
+
+    private func sendHello(reply: Bool) {
+        send(["type": "hello", "name": Host.current().localizedName ?? "Mac", "kind": "mac", "reply": reply])
+    }
 
     func send(_ message: [String: Any]) {
         guard state == .connected else { return }
@@ -95,6 +133,10 @@ final class CompanionBridge: NSObject, ObservableObject, UNUserNotificationCente
                         UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [self.notificationID(key)])
                     }
                 }
+            case "hello":
+                if let name = message["name"] as? String, !name.isEmpty { self.config.rememberPeer(name) }
+                self.helloCount += 1
+                if message["reply"] as? Bool != true { self.sendHello(reply: true) }
             case "clipboard": self.receiveClipboard(message)
             case "clipboard_ack": self.receiveClipboardAcknowledgement(message)
             default: break
@@ -177,7 +219,7 @@ final class CompanionBridge: NSObject, ObservableObject, UNUserNotificationCente
         content.userInfo = ["notificationKey": key]
         let request = UNNotificationRequest(identifier: notificationID(key), content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request)
-        lastActivity = "Received a notification from \(app)"
+        lastActivity = "Received a notification from \(app)."
     }
 
     private func notificationID(_ key: String) -> String { "android-\(CompanionCrypto.digest(key))" }
@@ -197,7 +239,7 @@ final class CompanionBridge: NSObject, ObservableObject, UNUserNotificationCente
             self.pendingClipboardText = String(text.prefix(65_536))
             self.pendingClipboardRetryInterval = 2
             self.sendPendingClipboard()
-            self.lastActivity = "Synced Mac clipboard"
+            self.lastActivity = "Synced the Mac clipboard."
         }
         RunLoop.main.add(timer, forMode: .common)
         clipboardTimer = timer
@@ -229,7 +271,7 @@ final class CompanionBridge: NSObject, ObservableObject, UNUserNotificationCente
             if receivedClipboardIDs.count > 32 { receivedClipboardIDs.removeFirst() }
             send(["type": "clipboard_ack", "clipboardID": id])
         }
-        lastActivity = "Android clipboard is ready to paste"
+        lastActivity = "Clipboard from \(config.phoneName) is ready to paste."
     }
 
     private func receiveClipboardAcknowledgement(_ message: [String: Any]) {
@@ -266,6 +308,7 @@ final class CompanionBridge: NSObject, ObservableObject, UNUserNotificationCente
         guard let key = response.notification.request.content.userInfo["notificationKey"] as? String else { return }
         if response.actionIdentifier == "REPLY", let reply = response as? UNTextInputNotificationResponse {
             send(["type": "notification_reply", "notificationKey": key, "text": reply.userText])
+            DispatchQueue.main.async { self.lastActivity = "Replied through \(self.config.phoneName)." }
         } else if response.actionIdentifier == "DISMISS" || response.actionIdentifier == UNNotificationDismissActionIdentifier {
             send(["type": "notification_dismiss", "notificationKey": key])
         }

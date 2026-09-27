@@ -12,12 +12,26 @@ data class CompanionConfig(
     val enabled: Boolean = false,
     val notificationsEnabled: Boolean = true,
     val clipboardEnabled: Boolean = true,
+    /** Name the paired Mac announced over the channel ("MacBook Pro"). */
+    val peerName: String = "",
 ) {
     val isComplete: Boolean
         get() = supabaseUrl.startsWith("https://") && publishableKey.isNotBlank() && pairingSecret.length >= 20
 
     val channelId: String
         get() = sha256Hex("wigly-channel-v1|$pairingSecret").take(40)
+
+    val macName: String get() = peerName.ifEmpty { "your Mac" }
+
+    /** Six digits both devices derive from the secret, compared at pairing. */
+    val pairingCode: String
+        get() {
+            val d = MessageDigest.getInstance("SHA-256").digest("wigly-pair-v1|$pairingSecret".toByteArray())
+            val n = ((d[0].toLong() and 0xff) shl 24 or ((d[1].toLong() and 0xff) shl 16) or
+                ((d[2].toLong() and 0xff) shl 8) or (d[3].toLong() and 0xff)) % 1_000_000
+            val s = "%06d".format(n)
+            return "${s.take(3)} ${s.takeLast(3)}"
+        }
 
     fun normalized(): CompanionConfig = copy(supabaseUrl = supabaseUrl.trim().trimEnd('/'))
 
@@ -33,6 +47,7 @@ data class CompanionConfig(
                 enabled = p.getBoolean("enabled", false),
                 notificationsEnabled = p.getBoolean("notifications", true),
                 clipboardEnabled = p.getBoolean("clipboard", true),
+                peerName = p.getString("peer_name", "") ?: "",
             )
         }
 
@@ -45,6 +60,7 @@ data class CompanionConfig(
                 .putBoolean("enabled", c.enabled)
                 .putBoolean("notifications", c.notificationsEnabled)
                 .putBoolean("clipboard", c.clipboardEnabled)
+                .putString("peer_name", c.peerName)
                 .apply()
         }
 
@@ -53,6 +69,20 @@ data class CompanionConfig(
             return p.getString("device_id", null) ?: UUID.randomUUID().toString().also {
                 p.edit().putString("device_id", it).apply()
             }
+        }
+
+        /** Parses the Mac's QR code: wiglywoo://pair?u=…&k=…&s=…&n=… */
+        fun fromPairingUrl(raw: String, base: CompanionConfig): CompanionConfig? {
+            val uri = runCatching { android.net.Uri.parse(raw.trim()) }.getOrNull() ?: return null
+            if (uri.scheme != "wiglywoo" || uri.host != "pair") return null
+            val parsed = base.copy(
+                supabaseUrl = uri.getQueryParameter("u").orEmpty(),
+                publishableKey = uri.getQueryParameter("k").orEmpty(),
+                pairingSecret = uri.getQueryParameter("s").orEmpty(),
+                peerName = uri.getQueryParameter("n").orEmpty(),
+                enabled = true,
+            ).normalized()
+            return parsed.takeIf { it.isComplete }
         }
 
         fun generateSecret(): String {
