@@ -89,6 +89,15 @@
             </intent-filter>
         </receiver>
 
+        <receiver
+            android:name=".IncomingActionReceiver"
+            android:exported="false" />
+
+        <!-- Pairing uses Google's code scanner UI; no camera permission needed. -->
+        <meta-data
+            android:name="com.google.mlkit.vision.DEPENDENCIES"
+            android:value="barcode_ui" />
+
         <service
             android:name=".NotificationRelayService"
             android:label="Wigly Woo notification relay"
