@@ -173,6 +173,20 @@ class MirrorServer @JvmOverloads constructor(
         }
     }
 
+    override fun runPower(action: String?): String {
+        enforceCaller()
+        val key = when (action) {
+            "wake" -> "KEYCODE_WAKEUP"
+            "sleep" -> "KEYCODE_SLEEP"
+            "lock" -> "KEYCODE_POWER"
+            else -> return err("unknown")
+        }
+        return runCatching {
+            Runtime.getRuntime().exec(arrayOf("input", "keyevent", key)).waitFor()
+            "ok"
+        }.getOrElse { err(it.message ?: "power failed") }
+    }
+
     override fun destroy() {
         stop()
         exitProcess(0)
@@ -205,6 +219,14 @@ class MirrorServer @JvmOverloads constructor(
         }
         override fun record(on: Boolean) {
             meta(JSONObject().put("type", "record").put("on", on))
+        }
+        override fun unlock(pin: String) {
+            val chars = pin.toCharArray()
+            try {
+                this@MirrorServer.unlock(String(chars), true)
+            } finally {
+                chars.fill('\u0000')
+            }
         }
     }
 

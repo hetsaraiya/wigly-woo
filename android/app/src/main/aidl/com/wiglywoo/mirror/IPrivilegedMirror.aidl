@@ -14,4 +14,5 @@ interface IPrivilegedMirror {
     String listSavedNetworks() = 7;
     /** near is decided in the app process, which owns the BLE scan. */
     String unlock(String pin, boolean near) = 8;
+    String runPower(String action) = 9;
 }

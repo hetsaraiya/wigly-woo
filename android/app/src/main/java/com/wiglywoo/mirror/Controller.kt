@@ -24,6 +24,7 @@ class Controller(
         fun record(on: Boolean)
         /** Return true when basic mirroring handled the point. */
         fun gesture(action: Int, x: Float, y: Float): Boolean = false
+        fun unlock(pin: String) {}
     }
 
     @Volatile var running = true
@@ -56,6 +57,7 @@ class Controller(
             9 -> actions.launch(String(msg, 1, msg.size - 1, Charsets.UTF_8))
             10 -> if (msg.size > 1) actions.record(msg[1].toInt() != 0)
             11 -> pointer(msg)
+            12 -> actions.unlock(String(msg, 1, msg.size - 1, Charsets.UTF_8))
         }
     }
 

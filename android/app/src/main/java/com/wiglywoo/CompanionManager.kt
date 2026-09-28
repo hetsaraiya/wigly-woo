@@ -6,6 +6,7 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import com.wiglywoo.ecosystem.EcosystemHost
 import com.wiglywoo.mirror.MirrorHost
 import org.json.JSONObject
 import java.util.concurrent.CopyOnWriteArraySet
@@ -47,6 +48,8 @@ object CompanionManager {
             deviceId = CompanionConfig.deviceId(app)
             ShizukuClipboardBridge.initialize(app)
             MirrorHost.install(app)
+            EcosystemHost.remember(app)
+            EcosystemHost.install(app)
         }
         applyConfig(CompanionConfig.load(app))
     }
@@ -188,6 +191,7 @@ object CompanionManager {
         }
         messageListeners.forEach { it(message) }
         MirrorHost.onRelay(message)
+        EcosystemHost.onRelay(message)
     }
 
     private fun sendHello(reply: Boolean) {

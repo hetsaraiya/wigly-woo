@@ -7,6 +7,7 @@ import android.content.Intent
 import android.os.Bundle
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
+import com.wiglywoo.ecosystem.EcosystemHost
 import org.json.JSONObject
 
 class NotificationRelayService : NotificationListenerService() {
@@ -66,7 +67,9 @@ class NotificationRelayService : NotificationListenerService() {
             .put("postedAt", sbn.postTime)
             .put("title", title)
             .put("body", body)
-            .put("canReply", canReply))
+            .put("canReply", canReply)
+            .put("ongoing", n.flags and Notification.FLAG_ONGOING_EVENT != 0))
+        EcosystemHost.onNotification(appName, "$title $body")
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification) {

@@ -74,6 +74,8 @@ object ShizukuMirrorBridge {
 
     fun capabilities(): String = call { it.capabilities() }
 
+    fun runPower(action: String): String = call { it.runPower(action) }
+
     private fun call(block: (IPrivilegedMirror) -> String): String {
         val svc = awaitService() ?: return """{"error":"shizuku"}"""
         return runCatching { block(svc) }.getOrElse { """{"error":${org.json.JSONObject.quote(it.message ?: "failed")}}""" }
