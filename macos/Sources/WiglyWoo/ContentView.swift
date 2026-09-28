@@ -1067,7 +1067,13 @@ private struct PhoneScreen: View {
     let theme: WWTheme
     @ObservedObject private var mirror = MirrorController.shared
     @ObservedObject private var config = CompanionConfig.shared
+    @ObservedObject private var messages = MessagesStore.shared
     @State private var query = ""
+    @State private var pin = ""
+    @State private var hasPIN = UnlockStore.hasPIN
+    @State private var edge = EdgeController.enabled
+    @State private var presence = BlePresence.enabled
+    @State private var replies: [UUID: String] = [:]
 
     var body: some View {
         let phone = config.phoneName
@@ -1075,49 +1081,113 @@ private struct PhoneScreen: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Phone").font(WWFont.serif(34, .semibold))
                 Text(mirror.detail).font(WWFont.serif(15)).foregroundStyle(theme.muted)
+                Text(mirror.shizuku).font(WWFont.serif(13)).foregroundStyle(theme.muted)
             }
             HStack(spacing: 10) {
-                Button(mirror.phase == .streaming ? "Stop mirroring" : "Mirror phone") { mirror.toggle() }
+                // ⌘⇧M is the global hot key; a local shortcut here would fire twice.
+                Button(mirror.active ? "Stop mirroring" : "Mirror phone") { mirror.toggle() }
                     .wwButton(theme, .primary)
-                    .keyboardShortcut("m", modifiers: [.command, .shift])
                 Button("Hotspot") {
                     CompanionBridge.shared.send(["type": "hotspot_request"])
                     Toaster.shared.show("Asking \(phone) to turn on its hotspot")
                 }.wwButton(theme, .secondary)
-                Button("Handoff") { HandoffBridge.sendFrontTab() }.wwButton(theme, .secondary)
+                Button("Send tab") { HandoffBridge.sendFrontTab() }.wwButton(theme, .secondary)
                 Button("Ring") { CompanionBridge.shared.send(["type": "ring", "target": "phone"]) }.wwButton(theme, .secondary)
-                Button("Unlock") { UnlockStore.unlockPhone() }.wwButton(theme, .secondary)
+                if hasPIN { Button("Unlock") { UnlockStore.unlockPhone() }.wwButton(theme, .secondary) }
             }
-            Text(mirror.shizuku).font(WWFont.serif(14)).foregroundStyle(theme.muted)
-            if mirror.latencyMs > 0 {
-                Text("About \(mirror.latencyMs) ms from the phone's clock").font(WWFont.serif(13)).foregroundStyle(theme.muted)
-            }
-            HStack(spacing: 8) {
-                tool("Back") { mirror.button(ControlCodec.back) }
-                tool("Home") { mirror.button(ControlCodec.home) }
-                tool("Recents") { mirror.button(ControlCodec.recents) }
-                tool("Controls") { mirror.button(ControlCodec.settings) }
-                tool(mirror.recording ? "Stop recording" : "Record") { mirror.toggleRecord() }
-                tool("Screen off") { mirror.screenOff(true) }
+            if mirror.phase == .streaming {
+                HStack(spacing: 8) {
+                    tool("Back") { mirror.button(ControlCodec.back) }
+                    tool("Home") { mirror.button(ControlCodec.home) }
+                    tool("Recents") { mirror.button(ControlCodec.recents) }
+                    tool("Controls") { mirror.button(ControlCodec.settings) }
+                    tool(mirror.recording ? "Stop recording" : "Record") { mirror.toggleRecord() }
+                    tool(mirror.screenDark ? "Screen on" : "Screen off") { mirror.toggleScreen() }
+                }
             }
             if !mirror.apps.isEmpty {
-                Kicker(theme: theme, text: "Apps")
-                TextField("Search apps", text: $query).textFieldStyle(.plain).font(WWFont.serif(15))
-                let shown = mirror.apps.filter { query.isEmpty || $0.label.localizedCaseInsensitiveContains(query) }
-                ForEach(shown.prefix(12)) { app in
-                    Button(app.label) { mirror.launch(app.component) }
-                        .buttonStyle(.plain)
-                        .font(WWFont.serif(15))
+                VStack(alignment: .leading, spacing: 8) {
+                    Kicker(theme: theme, text: "Apps")
+                    WWField(theme: theme, placeholder: "Search apps", text: $query).frame(maxWidth: 320)
+                    let shown = mirror.apps.filter { query.isEmpty || $0.label.localizedCaseInsensitiveContains(query) }
+                    ForEach(shown.prefix(12)) { app in
+                        Button { mirror.launch(app.id) } label: {
+                            HStack(spacing: 8) {
+                                if let icon = app.icon { Image(nsImage: icon).resizable().frame(width: 20, height: 20) }
+                                Text(app.label).font(WWFont.serif(15)).foregroundStyle(theme.link)
+                            }
+                        }.buttonStyle(.plain)
+                    }
                 }
             }
             if !mirror.recent.isEmpty {
-                Kicker(theme: theme, text: "Recent on \(phone)")
-                ForEach(mirror.recent) { file in
-                    Text(file.name).font(WWFont.serif(14))
-                        .onDrag { NSItemProvider(object: file.name as NSString) }
-                        .onTapGesture {
-                            CompanionBridge.shared.send(["type": "send_recent", "uri": file.uri])
+                VStack(alignment: .leading, spacing: 8) {
+                    Kicker(theme: theme, text: "Recent on \(phone) · click to copy to this Mac")
+                    ForEach(mirror.recent) { file in
+                        Button(file.name) { mirror.sendRecent(file) }
+                            .buttonStyle(.plain).font(WWFont.serif(14)).foregroundStyle(theme.link)
+                    }
+                }
+            }
+            if !messages.items.isEmpty {
+                VStack(alignment: .leading, spacing: 0) {
+                    Kicker(theme: theme, text: "Messages")
+                    ForEach(messages.items.prefix(5)) { item in
+                        RuleRow(theme: theme, minHeight: 64) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(item.address).font(WWFont.serif(14, .semibold))
+                                Text(item.body).font(WWFont.serif(14)).foregroundStyle(theme.muted).lineLimit(3)
+                            }
+                            Spacer()
+                            WWField(theme: theme, placeholder: "Reply", text: Binding(
+                                get: { replies[item.id] ?? "" }, set: { replies[item.id] = $0 })).frame(width: 200)
+                            Button("Send") {
+                                let body = replies[item.id] ?? ""
+                                guard !body.isEmpty else { return }
+                                messages.reply(to: item.address, body: body)
+                                replies[item.id] = nil
+                            }.wwButton(theme, .ghost)
                         }
+                    }
+                }
+            }
+            VStack(alignment: .leading, spacing: 0) {
+                Kicker(theme: theme, text: "On this Mac")
+                RuleRow(theme: theme) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Control the phone past the screen edge").font(WWFont.serif(15))
+                        Text("Push the pointer off the right edge; push back to return. Needs Accessibility.")
+                            .font(WWFont.serif(13)).foregroundStyle(theme.muted)
+                    }
+                    Spacer()
+                    WWToggle(theme: theme, isOn: Binding(get: { edge }, set: { edge = $0; EdgeController.enabled = $0; edge = EdgeController.enabled }))
+                }
+                RuleRow(theme: theme) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Lock this Mac when the phone walks away").font(WWFont.serif(15))
+                        Text("Turn on Nearby on the phone too. Uses Bluetooth signal strength, so it is coarse.")
+                            .font(WWFont.serif(13)).foregroundStyle(theme.muted)
+                    }
+                    Spacer()
+                    WWToggle(theme: theme, isOn: Binding(get: { presence }, set: { presence = $0; BlePresence.enabled = $0 }))
+                }
+                RuleRow(theme: theme) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Unlock the phone from this Mac").font(WWFont.serif(15))
+                        Text(hasPIN ? "PIN saved behind Touch ID. Works while Shizuku runs on the phone."
+                                    : "Save the phone's PIN. It stays in this Mac's keychain behind Touch ID.")
+                            .font(WWFont.serif(13)).foregroundStyle(theme.muted)
+                    }
+                    Spacer()
+                    if hasPIN {
+                        Button("Forget PIN") { UnlockStore.forget(); hasPIN = false }.wwButton(theme, .ghost)
+                    } else {
+                        WWField(theme: theme, placeholder: "PIN", text: $pin, secure: true).frame(width: 120)
+                        Button("Save") {
+                            if let error = UnlockStore.save(pin) { Toaster.shared.show(error) } else { hasPIN = true }
+                            pin = ""
+                        }.wwButton(theme, .ghost)
+                    }
                 }
             }
         }
@@ -1154,9 +1224,10 @@ struct MenuBarPanel: View {
             HStack(spacing: 10) {
                 StatusDot(theme: theme, status: companion.status)
                 Text(statusCopy(companion.status, phone: phone).0).font(WWFont.serif(14, .semibold))
-            Text(phoneStatus.line).font(WWFont.serif(12)).foregroundStyle(theme.muted)
             }
-            .padding(.horizontal, 8).padding(.vertical, 6)
+            .padding(.horizontal, 8).padding(.top, 6)
+            Text(phoneStatus.line).font(WWFont.serif(12)).foregroundStyle(theme.muted)
+                .padding(.horizontal, 8).padding(.leading, 18).padding(.bottom, 6)
 
             if let t = core.active {
                 let progress = t.total > 0 ? min(1, Double(t.sent) / Double(t.total)) : 0

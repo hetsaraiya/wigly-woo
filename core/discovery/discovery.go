@@ -23,29 +23,12 @@ var (
 
 const announceInterval = 2 * time.Second
 
-// Capability bits a peer may advertise. Older peers omit the field and are
-// treated as having none of them. Unknown bits are ignored.
-const (
-	CapMirror uint32 = 1 << iota
-	CapCamera
-	CapHotspot
-	CapMic
-	CapFlexDisplay
-	CapCalls
-	CapSMS
-	CapClipboard
-	CapAudio
-	CapUnlock
-)
-
 // Beacon is the payload broadcast on the wire.
 type Beacon struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
-	Port        int    `json:"port"`              // TCP port the transfer server listens on
-	Fingerprint string `json:"fingerprint"`       // TLS cert fingerprint, shown at pairing
-	Caps        uint32 `json:"caps,omitempty"`    // Cap* bits; absent on older peers
-	Session     int    `json:"session,omitempty"` // TCP port of the long-lived media session
+	Port        int    `json:"port"`        // TCP port the transfer server listens on
+	Fingerprint string `json:"fingerprint"` // TLS cert fingerprint, shown at pairing
 }
 
 // Peer is a discovered device.
@@ -55,43 +38,29 @@ type Peer struct {
 	Addr        net.IP
 	Port        int
 	Fingerprint string
-	Caps        uint32
-	Session     int
 	LastSeen    time.Time
 }
 
-// Announce multicasts current() until ctx is cancelled. The function is called
-// on every tick so a session port or capability bit that appears later is
-// picked up without restarting discovery.
-func Announce(ctx context.Context, current func() Beacon) error {
+// Announce multicasts the given beacon until ctx is cancelled.
+func Announce(ctx context.Context, b Beacon) error {
 	conn, err := net.DialUDP("udp4", nil, groupAddr)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
 
-	send := func() error {
-		payload, err := json.Marshal(current())
-		if err != nil {
-			return err
-		}
-		_, err = conn.Write(payload)
-		return err
-	}
-
+	payload, _ := json.Marshal(b)
 	ticker := time.NewTicker(announceInterval)
 	defer ticker.Stop()
 
 	// Send one immediately so discovery feels instant.
-	if err := send(); err != nil {
-		return err
-	}
+	_, _ = conn.Write(payload)
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			if err := send(); err != nil {
+			if _, err := conn.Write(payload); err != nil {
 				return err
 			}
 		}
@@ -149,15 +118,13 @@ func (b *Browser) Browse(ctx context.Context) error {
 			Addr:        src.IP,
 			Port:        bc.Port,
 			Fingerprint: bc.Fingerprint,
-			Caps:        bc.Caps,
-			Session:     bc.Session,
 			LastSeen:    time.Now(),
 		}
 		b.mu.Lock()
-		prev, existed := b.peers[peer.ID]
+		_, existed := b.peers[peer.ID]
 		b.peers[peer.ID] = peer
 		b.mu.Unlock()
-		if b.OnPeer != nil && (!existed || peerChanged(prev, peer)) {
+		if b.OnPeer != nil && !existed {
 			b.OnPeer(peer)
 		}
 	}
@@ -187,9 +154,4 @@ func (b *Browser) Lookup(idOrName string) (Peer, bool) {
 		}
 	}
 	return Peer{}, false
-}
-
-func peerChanged(a, b Peer) bool {
-	return a.Name != b.Name || a.Port != b.Port || a.Fingerprint != b.Fingerprint ||
-		a.Caps != b.Caps || a.Session != b.Session || !a.Addr.Equal(b.Addr)
 }

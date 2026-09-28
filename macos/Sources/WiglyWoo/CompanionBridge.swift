@@ -13,6 +13,8 @@ final class CompanionBridge: NSObject, ObservableObject, UNUserNotificationCente
     @Published private(set) var notificationsAuthorized = false
     /// Bumped whenever the phone announces itself; the pairing dialog waits on it.
     @Published private(set) var helloCount = 0
+    /// The phone core's current certificate fingerprint, from hello or mirror_accept.
+    private(set) var phoneFingerprint = ""
     @Published private(set) var connectedSince: Date?
 
     var status: CompanionStatus {
@@ -144,10 +146,17 @@ final class CompanionBridge: NSObject, ObservableObject, UNUserNotificationCente
             case "hello":
                 if let name = message["name"] as? String, !name.isEmpty { self.config.rememberPeer(name) }
                 if let fp = message["fingerprint"] as? String, !fp.isEmpty {
+                    self.phoneFingerprint = fp
                     fp.withCString { woo_session_allow($0) }
                 }
                 self.helloCount += 1
                 if message["reply"] as? Bool != true { self.sendHello(reply: true) }
+            case "mirror_accept":
+                // The phone announces the certificate it is about to dial with.
+                if let fp = message["fingerprint"] as? String, !fp.isEmpty {
+                    self.phoneFingerprint = fp
+                    fp.withCString { woo_session_allow($0) }
+                }
             case "mirror_ready":
                 MirrorController.shared.ready(message["mode"] as? String ?? "shizuku")
             case "mirror_error":

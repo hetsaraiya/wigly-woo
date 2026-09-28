@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"crypto/tls"
@@ -10,11 +11,15 @@ import (
 	"net"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/wiglywoo/core/crypto"
 )
 
 const magic = "WOOS"
+
+// handshakeTimeout bounds the TLS handshake and magic exchange.
+const handshakeTimeout = 10 * time.Second
 
 // ErrFingerprint is returned when the peer certificate is not the one requested.
 var ErrFingerprint = errors.New("session fingerprint mismatch")
@@ -25,7 +30,7 @@ var ErrNotAllowed = errors.New("session peer not allowed")
 // ErrClosed is returned when the session is already closed.
 var ErrClosed = errors.New("session closed")
 
-// Conn is one mutual-TLS session. TakeFDs hands the shell one datagram
+// Conn is one mutual-TLS session. TakeFDs hands the shell one stream
 // socket per channel. The shell owns those descriptors after TakeFDs; this
 // side only closes its own ends.
 type Conn struct {
@@ -36,16 +41,24 @@ type Conn struct {
 	tls    net.Conn
 	mux    *Mux
 	locals []*os.File
+
+	fdMu   sync.Mutex // guards remote and taken
 	remote [4]int
 	taken  bool
 
 	done chan struct{}
 	once sync.Once
+
+	ctrlMu    sync.Mutex // serializes writes to the shell's control socket
+	ctrlLocal *os.File
+	lastSync  time.Time
 }
 
 // FDs is the shell-facing end of video, audio, control, and meta.
 // The second call returns -1s; the descriptors are owned by the caller.
 func (c *Conn) TakeFDs() (video, audio, control, meta int) {
+	c.fdMu.Lock()
+	defer c.fdMu.Unlock()
 	if c.taken {
 		return -1, -1, -1, -1
 	}
@@ -65,11 +78,14 @@ func (c *Conn) Close() {
 		for _, f := range c.locals {
 			_ = f.Close()
 		}
+		c.fdMu.Lock()
 		if !c.taken {
+			c.taken = true // closed here, so never handed out
 			for _, fd := range c.remote {
 				closeFD(fd)
 			}
 		}
+		c.fdMu.Unlock()
 	})
 }
 
@@ -166,10 +182,12 @@ func Dial(ctx context.Context, addr string, id *crypto.Identity, peerFingerprint
 		_ = raw.Close()
 		return nil, err
 	}
+	_ = raw.SetDeadline(time.Now().Add(handshakeTimeout))
 	if err := readMagic(raw); err != nil {
 		_ = raw.Close()
 		return nil, err
 	}
+	_ = raw.SetDeadline(time.Time{})
 	noteTCP(raw)
 	return startConn(raw, fp, "dial")
 }
@@ -179,6 +197,8 @@ func acceptConn(raw net.Conn, allow func(string) bool) (*Conn, error) {
 	if !ok {
 		return nil, errors.New("session accept: not a tls conn")
 	}
+	// A peer that connects and stalls must not hold a goroutine forever.
+	_ = raw.SetDeadline(time.Now().Add(handshakeTimeout))
 	if err := tc.Handshake(); err != nil {
 		return nil, err
 	}
@@ -192,6 +212,7 @@ func acceptConn(raw net.Conn, allow func(string) bool) (*Conn, error) {
 	if _, err := raw.Write([]byte(magic)); err != nil {
 		return nil, err
 	}
+	_ = raw.SetDeadline(time.Time{})
 	noteTCP(raw)
 	return startConn(raw, fp, "listen")
 }
@@ -207,7 +228,7 @@ func startConn(raw net.Conn, fp, role string) (*Conn, error) {
 		remote:      [4]int{-1, -1, -1, -1},
 		done:        make(chan struct{}),
 	}
-	localFD := map[byte]int{}
+	locals := map[byte]*os.File{}
 	for i, ch := range channels {
 		local, remote, err := newPair()
 		if err != nil {
@@ -216,39 +237,35 @@ func startConn(raw net.Conn, fp, role string) (*Conn, error) {
 		}
 		c.locals = append(c.locals, local)
 		c.remote[i] = remote
-		localFD[ch] = int(local.Fd())
-		go c.pumpUp(ch, int(local.Fd()))
+		locals[ch] = local
 	}
-	go c.pumpDown(localFD)
+	c.ctrlLocal = locals[ChanControl]
+	c.mux.OnDrop = c.requestSyncFrame
+	// Pumps start only once every socket exists: a pump that fails calls Close.
+	for ch, local := range locals {
+		go c.pumpUp(ch, local)
+	}
+	go c.pumpDown(locals)
 	go c.writeLoop()
 	return c, nil
 }
 
-func (c *Conn) pumpUp(ch byte, fd int) {
-	buf := make([]byte, maxPayload)
+// pumpUp forwards records the shell writes onto the TLS connection.
+func (c *Conn) pumpUp(ch byte, local *os.File) {
+	defer c.Close()
+	r := bufio.NewReaderSize(local, 256<<10)
 	for {
-		n, err := readMsg(fd, buf)
-		if n > 0 {
-			payload := append([]byte(nil), buf[:n]...)
-			flags := byte(0)
-			if ch == ChanVideo {
-				flags = VideoFlags(payload)
-			} else if ch == ChanAudio {
-				flags = FlagDroppable
-			}
-			c.mux.Enqueue(Frame{Channel: ch, Flags: flags, Payload: payload})
-		}
+		payload, err := readRecord(r)
 		if err != nil {
-			if isTimeout(err) || isRetryableRead(err) {
-				select {
-				case <-c.done:
-					return
-				default:
-					continue
-				}
-			}
 			return
 		}
+		flags := byte(0)
+		if ch == ChanVideo {
+			flags = VideoFlags(payload)
+		} else if ch == ChanAudio {
+			flags = AudioFlags(payload)
+		}
+		c.mux.Enqueue(Frame{Channel: ch, Flags: flags, Payload: payload})
 	}
 }
 
@@ -265,19 +282,43 @@ func (c *Conn) writeLoop() {
 	}
 }
 
-func (c *Conn) pumpDown(fds map[byte]int) {
+// pumpDown hands frames from the TLS connection to the shell. Late video is
+// already dropped by the sender's mux, so this simply writes.
+func (c *Conn) pumpDown(locals map[byte]*os.File) {
 	defer c.Close()
 	for {
 		f, err := ReadFrame(c.tls)
 		if err != nil {
 			return
 		}
-		fd, ok := fds[f.Channel]
+		local, ok := locals[f.Channel]
 		if !ok {
 			continue
 		}
-		_ = sendMsg(fd, f.Payload, f.Flags&FlagDroppable != 0)
+		if f.Channel == ChanControl {
+			c.ctrlMu.Lock()
+		}
+		err = writeRecord(local, f.Payload)
+		if f.Channel == ChanControl {
+			c.ctrlMu.Unlock()
+		}
+		if err != nil {
+			return
+		}
 	}
+}
+
+// requestSyncFrame tells this side's shell to encode a keyframe, so video
+// resumes right after a drop. The mux calls it for every dropped frame; it
+// asks at most every 250 ms and keeps asking until the drops stop.
+func (c *Conn) requestSyncFrame() {
+	c.ctrlMu.Lock()
+	defer c.ctrlMu.Unlock()
+	if time.Since(c.lastSync) < 250*time.Millisecond || c.ctrlLocal == nil {
+		return
+	}
+	c.lastSync = time.Now()
+	_ = writeRecord(c.ctrlLocal, []byte{CtrlSyncFrame})
 }
 
 func readMagic(r io.Reader) error {
@@ -295,9 +336,4 @@ func newID() string {
 	var b [8]byte
 	_, _ = rand.Read(b[:])
 	return hex.EncodeToString(b[:])
-}
-
-func isTimeout(err error) bool {
-	var ne net.Error
-	return errors.Is(err, os.ErrDeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout())
 }

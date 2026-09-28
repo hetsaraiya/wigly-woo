@@ -7,6 +7,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -26,15 +27,7 @@ import java.io.File
 import java.util.UUID
 import java.util.concurrent.Executors
 
-data class PeerRow(
-    val id: String,
-    val name: String,
-    val fingerprint: String,
-    val addr: String = "",
-    val port: Int = 0,
-    val caps: Int = 0,
-    val session: Int = 0,
-)
+data class PeerRow(val id: String, val name: String, val fingerprint: String)
 data class TransferUi(val name: String, val dir: String, val peer: String, val sent: Long, val total: Long, val speed: Double)
 data class Trust(val name: String, val fingerprint: String, val file: String, val size: Long)
 data class QueuedSend(val id: String, val peer: PeerRow, val uri: Uri, val name: String, val size: Long)
@@ -77,15 +70,60 @@ object WooState {
     val incomingDir: File get() = File(app.getExternalFilesDir(null), "incoming")
 
     /** Called from MainActivity.onCreate, each time the core (re)starts. */
-    fun initialize(context: Context) {
-        if (!::app.isInitialized) {
-            app = context.applicationContext
-            loadHistory()
-            createChannels()
+    private var coreStarted = false
+    private var multicastLock: WifiManager.MulticastLock? = null
+
+    /**
+     * Starts the Go core once per process. The activity and the companion
+     * service both call this; the core outlives the activity so the Mac can
+     * reach the phone while it sits in the background.
+     * Returns a message for the UI when the core could not start.
+     */
+    @Synchronized
+    fun ensureCore(context: Context): String? {
+        initialize(context)
+        if (coreStarted) return null
+        CoreBridge.load()
+        CoreBridge.loadError?.let { return "Native library load failed:\n\n" + it.stackTraceToString() }
+        return try {
+            val wifi = app.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            multicastLock = wifi.createMulticastLock("wigly-woo").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+            incomingDir.mkdirs()
+            val rc = CoreBridge.start(name = CompanionConfig.deviceName(app), saveDir = incomingDir.absolutePath)
+            if (rc == 0) {
+                coreStarted = true
+                null
+            } else "woo_start returned $rc"
+        } catch (t: Throwable) {
+            "Core start failed:\n\n" + t.stackTraceToString()
         }
-        peers.clear()
+    }
+
+    /** This phone's current core fingerprint, or "" before the core starts. */
+    fun fingerprint(): String =
+        if (coreStarted) runCatching { CoreBridge.identity().optString("fingerprint") }.getOrDefault("") else ""
+
+    /** The discovered peer that is the paired Mac, falling back to the only peer. */
+    fun pairedPeer(): PeerRow? {
+        val fp = CompanionManager.macFingerprint
+        return peers.firstOrNull { fp.isNotEmpty() && it.fingerprint == fp } ?: peers.singleOrNull()
+    }
+
+    private fun initialize(context: Context) {
+        if (::app.isInitialized) return
+        app = context.applicationContext
+        loadHistory()
+        createChannels()
         refreshReceived()
-        CoreBridge.listener = { ev -> main.post { handle(ev) } }
+        CoreBridge.listener = { ev ->
+            // Session events carry file descriptors and may block on the
+            // Shizuku binder, so they stay off the main thread.
+            if (ev.optString("type").startsWith("session_")) MirrorHost.onCore(ev)
+            else main.post { handle(ev) }
+        }
     }
 
     fun flash(message: String) {
@@ -170,12 +208,8 @@ object WooState {
     private fun handle(ev: JSONObject) {
         when (ev.optString("type")) {
             "peer_found" -> {
-                val row = PeerRow(
-                    ev.optString("id"), ev.optString("name"), ev.optString("fingerprint"),
-                    ev.optString("addr"), ev.optInt("port"), ev.optInt("caps"), ev.optInt("session"),
-                )
-                val index = peers.indexOfFirst { it.id == row.id }
-                if (index >= 0) peers[index] = row else peers.add(row)
+                val row = PeerRow(ev.optString("id"), ev.optString("name"), ev.optString("fingerprint"))
+                if (peers.none { it.id == row.id }) peers.add(row)
             }
             "trust_request" -> {
                 val req = Trust(ev.optString("name"), ev.optString("fingerprint"), ev.optString("file"), ev.optLong("size"))
@@ -221,7 +255,6 @@ object WooState {
                 else if (wasSending) flash("Canceled")
                 finishTransfer()
             }
-            "session_open", "session_closed", "session_error", "hotspot_ready" -> MirrorHost.onCore(ev)
         }
     }
 

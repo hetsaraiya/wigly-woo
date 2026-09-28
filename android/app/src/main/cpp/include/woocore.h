@@ -27,14 +27,11 @@ extern "C" {
  *   {"type":"progress","dir":"send|recv","name","sent","total"}
  *   {"type":"done","dir":"send|recv","name","path"}
  *   {"type":"error","message"}
- *   {"type":"peer_found",...,"caps","session"}
  *   {"type":"session_open","id","fingerprint","role","video","audio","control","meta"}
  *   {"type":"session_closed","id"}
  *   {"type":"session_error","message"}
- *   {"type":"hotspot_ready","ssid","psk"}
  *
  * session_open file descriptors are datagram sockets owned by the shell.
- * hotspot_ready stays in-process; do not put the passphrase on a beacon.
  */
 typedef void (*woo_event_cb)(const char* json);
 extern void woo_set_event_cb(woo_event_cb cb);
@@ -71,9 +68,6 @@ extern void woo_cancel(void);
 /* Release a string returned by this library. */
 extern void woo_free(char* p);
 
-/* Capability bits advertised on the next beacon. */
-extern void woo_set_caps(unsigned int caps);
-
 /* Let this certificate open a media session to us. */
 extern void woo_session_allow(const char* fingerprint);
 
@@ -82,15 +76,6 @@ extern int  woo_session_dial(const char* addr, const char* fingerprint);
 
 /* End one media session. */
 extern void woo_session_close(const char* id);
-
-/* mode: 0 off, 1 host, 2 join. ssid and psk are used for join. */
-extern int  woo_hotspot_configure(int mode, const char* ssid, const char* psk);
-
-/* Shell radio callbacks. Return 0 on success. Buffers are NUL-terminated. */
-typedef int (*woo_hotspot_up_fn)(char* ssid, int ssid_cap, char* psk, int psk_cap);
-typedef int (*woo_hotspot_join_fn)(const char* ssid, const char* psk);
-typedef int (*woo_wifi_direct_fn)(void);
-extern void woo_set_link_levers(woo_hotspot_up_fn up, woo_hotspot_join_fn join, woo_wifi_direct_fn direct);
 
 #ifdef __cplusplus
 }

@@ -1,22 +1,27 @@
 import AVFoundation
 import Foundation
 
-/// Plays phone audio. The converter is best-effort: a packet the converter
-/// refuses is dropped so the jitter buffer cannot grow.
+/// Plays phone audio: raw AAC-LC frames, 48 kHz stereo, as the phone's
+/// AudioCapture sends them. A packet the converter refuses is dropped so the
+/// jitter buffer cannot grow.
 public final class AudioPlayer {
     public private(set) var playing = false
-    public private(set) var available = false
     private let engine = AVAudioEngine()
     private let node = AVAudioPlayerNode()
     private let output: AVAudioFormat
     private var input: AVAudioFormat?
     private var converter: AVAudioConverter?
-    private var cookie = Data()
+    /// Buffers scheduled but not yet played. Kept to a few AAC frames (~21 ms
+    /// each) so audio cannot drift behind the picture.
+    private var queued = 0
+    private let queueLock = NSLock()
+    private static let maxQueued = 3
 
     public init() {
         output = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 2, interleaved: false)!
         engine.attach(node)
         engine.connect(node, to: engine.mainMixerNode, format: output)
+        rebuild()
     }
 
     public func start() {
@@ -28,18 +33,15 @@ public final class AudioPlayer {
 
     public func stop() {
         node.stop()
+        queueLock.lock(); queued = 0; queueLock.unlock()
         engine.stop()
         playing = false
     }
 
     public func push(_ packet: Data) {
-        guard let media = Datagram.media(packet) else { return }
-        if media.kind == 0 {
-            cookie = Data(media.payload)
-            rebuild()
-            return
-        }
-        guard let converter, let compressed = compressedBuffer(Data(media.payload)) else { return }
+        // Codec config (kind 0) only repeats what the fixed format already says.
+        guard let media = Datagram.media(packet), media.kind == 1, !media.payload.isEmpty else { return }
+        guard let converter, let compressed = compressedBuffer(media.payload) else { return }
         guard let pcm = AVAudioPCMBuffer(pcmFormat: output, frameCapacity: 4096) else { return }
         var error: NSError?
         var handed = false
@@ -53,14 +55,22 @@ public final class AudioPlayer {
             return compressed
         }
         guard error == nil, pcm.frameLength > 0 else { return }
-        node.scheduleBuffer(pcm, completionHandler: nil)
+        queueLock.lock()
+        let full = queued >= Self.maxQueued
+        if !full { queued += 1 }
+        queueLock.unlock()
+        if full { return } // late audio is dropped rather than played late
+        node.scheduleBuffer(pcm) { [weak self] in
+            guard let self else { return }
+            self.queueLock.lock(); self.queued -= 1; self.queueLock.unlock()
+        }
     }
 
     private func rebuild() {
         var asbd = AudioStreamBasicDescription(
             mSampleRate: 48_000,
             mFormatID: kAudioFormatMPEG4AAC,
-            mFormatFlags: 0,
+            mFormatFlags: UInt32(MPEG4ObjectID.AAC_LC.rawValue),
             mBytesPerPacket: 0,
             mFramesPerPacket: 1024,
             mBytesPerFrame: 0,
@@ -70,8 +80,6 @@ public final class AudioPlayer {
         guard let format = AVAudioFormat(streamDescription: &asbd) else { return }
         input = format
         converter = AVAudioConverter(from: format, to: output)
-        if !cookie.isEmpty { converter?.magicCookie = cookie }
-        available = converter != nil
     }
 
     private func compressedBuffer(_ packet: Data) -> AVAudioCompressedBuffer? {

@@ -3,34 +3,20 @@
 //
 // Strategies are tried in order; the first that can reach the peer wins. The
 // transfer layer never learns which one won — that decoupling is the whole
-// point. SameLAN works on any shared subnet. Hotspot works once the shell arms
-// it and performs the radio change. Wi-Fi Direct stays unsupported because
-// macOS has no public API for it.
+// point. Phase 1 ships SameLAN working; Hotspot and WifiDirect are stubs whose
+// actual radio work is fulfilled by the platform shell via the FFI "link
+// levers" (the core cannot toggle radios portably).
 package link
 
 import (
 	"errors"
 	"fmt"
-	"net"
-	"strconv"
-	"sync"
 
 	"github.com/wiglywoo/core/discovery"
 )
 
 // ErrUnsupported means a strategy cannot run on this device/OS right now.
 var ErrUnsupported = errors.New("link strategy unsupported here")
-
-// ErrAwaitingPeer means the hotspot radio is up (or the join succeeded) and
-// discovery has not yet seen the peer on that network.
-var ErrAwaitingPeer = errors.New("hotspot is up; waiting for the peer")
-
-// Hotspot modes. Off is the default so an ordinary send never toggles a radio.
-const (
-	HotspotOff  = 0
-	HotspotHost = 1
-	HotspotJoin = 2
-)
 
 // Levers are the radio actions only the platform shell can perform. The core
 // calls these; each shell implements them for its OS (or returns ErrUnsupported).
@@ -66,141 +52,41 @@ func (SameLAN) Resolve(p discovery.Peer) (string, error) {
 	return fmt.Sprintf("%s:%d", p.Addr.String(), p.Port), nil
 }
 
-// Hotspot brings up or joins a phone hotspot so both ends share a subnet.
-// The radio work is delegated to the shell's Levers. Resolve stays unsupported
-// until the shell calls Configure — a failed LAN send must not toggle the radio.
-type Hotspot struct {
-	Levers Levers
-	// OnReady is called once when this device has brought a hotspot up.
-	OnReady func(ssid, psk string)
+// Hotspot: bring up / join a phone hotspot so both ends share a subnet without
+// any existing Wi-Fi. The radio work is delegated to the shell's Levers.
+type Hotspot struct{ Levers Levers }
 
-	mu      sync.Mutex
-	mode    int
-	ssid    string
-	psk     string
-	brought bool
-}
-
-// Configure arms the strategy. Host ignores ssid and psk; the shell's lever
-// reports them. Join uses the credentials the other device sent.
-func (h *Hotspot) Configure(mode int, ssid, psk string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.mode = mode
-	h.ssid = ssid
-	h.psk = psk
-	h.brought = false
-}
-
-// Credentials returns the last SSID and passphrase this device hosted or was
-// told to join.
-func (h *Hotspot) Credentials() (ssid, psk string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.ssid, h.psk
-}
-
-func (h *Hotspot) Name() string { return "hotspot" }
-
-func (h *Hotspot) Resolve(p discovery.Peer) (string, error) {
-	if h == nil || h.Levers == nil {
-		return "", ErrUnsupported
-	}
-	h.mu.Lock()
-	mode, ssid, psk, brought := h.mode, h.ssid, h.psk, h.brought
-	h.mu.Unlock()
-	if mode == HotspotOff {
-		return "", ErrUnsupported
-	}
-	if mode == HotspotJoin {
-		if ssid == "" {
-			return "", fmt.Errorf("hotspot join: missing credentials")
-		}
-		if !brought {
-			if err := h.Levers.JoinHotspot(ssid, psk); err != nil {
-				return "", err
-			}
-			h.mu.Lock()
-			h.brought = true
-			h.mu.Unlock()
-		}
-	} else if !brought {
-		gotSSID, gotPSK, err := h.Levers.BringUpHotspot()
-		if err != nil {
-			return "", err
-		}
-		h.mu.Lock()
-		h.ssid, h.psk, h.brought = gotSSID, gotPSK, true
-		h.mu.Unlock()
-		ssid = gotSSID
-		if h.OnReady != nil {
-			h.OnReady(gotSSID, gotPSK)
-		}
-	}
-	if p.Addr == nil || p.Port == 0 {
-		return "", fmt.Errorf("%w (%s)", ErrAwaitingPeer, ssid)
-	}
-	return net.JoinHostPort(p.Addr.String(), strconv.Itoa(p.Port)), nil
+func (Hotspot) Name() string { return "hotspot" }
+func (h Hotspot) Resolve(p discovery.Peer) (string, error) {
+	// Real implementation: negotiate who hosts, call Levers.BringUpHotspot /
+	// JoinHotspot, then re-discover the peer on the new subnet. Phase 2.
+	return "", ErrUnsupported
 }
 
 // WifiDirect: peer-to-peer Wi-Fi where both ends support it (Android does;
 // macOS has no clean public API — hence Phase 2 / stretch).
 type WifiDirect struct{ Levers Levers }
 
-func (*WifiDirect) Name() string { return "wifi-direct" }
-func (w *WifiDirect) Resolve(p discovery.Peer) (string, error) {
-	// macOS has no public Wi-Fi Direct API, so a phone that starts a group
-	// still has nothing to join. Instant Hotspot is the substitute.
+func (WifiDirect) Name() string { return "wifi-direct" }
+func (w WifiDirect) Resolve(p discovery.Peer) (string, error) {
 	return "", ErrUnsupported
 }
 
 // Manager tries strategies in order and returns the first address that resolves.
 type Manager struct {
-	hotspot    *Hotspot
-	direct     *WifiDirect
 	strategies []Strategy
 }
 
-// NewManager builds the default chain: LAN, then hotspot, then direct.
-// Hotspot does nothing until ConfigureHotspot arms it.
+// NewManager builds the default Phase 1 chain: LAN, then hotspot, then direct.
 func NewManager(levers Levers) *Manager {
 	if levers == nil {
 		levers = NoLevers{}
 	}
-	h := &Hotspot{Levers: levers}
-	d := &WifiDirect{Levers: levers}
-	return &Manager{
-		hotspot:    h,
-		direct:     d,
-		strategies: []Strategy{SameLAN{}, h, d},
-	}
-}
-
-// SetLevers replaces the shell callbacks used by hotspot and Wi-Fi Direct.
-func (m *Manager) SetLevers(levers Levers) {
-	if levers == nil {
-		levers = NoLevers{}
-	}
-	if m.hotspot != nil {
-		m.hotspot.Levers = levers
-	}
-	if m.direct != nil {
-		m.direct.Levers = levers
-	}
-}
-
-// ConfigureHotspot arms or disarms the hotspot strategy.
-func (m *Manager) ConfigureHotspot(mode int, ssid, psk string) {
-	if m.hotspot != nil {
-		m.hotspot.Configure(mode, ssid, psk)
-	}
-}
-
-// SetHotspotReady receives the SSID and passphrase when this device hosts.
-func (m *Manager) SetHotspotReady(fn func(ssid, psk string)) {
-	if m.hotspot != nil {
-		m.hotspot.OnReady = fn
-	}
+	return &Manager{strategies: []Strategy{
+		SameLAN{},
+		Hotspot{Levers: levers},
+		WifiDirect{Levers: levers},
+	}}
 }
 
 // Connect returns a dialable address for the peer plus the winning strategy name.

@@ -9,10 +9,8 @@ public enum ControlCodec {
     public static let text: UInt8 = 4
     public static let button: UInt8 = 5
     public static let clipboard: UInt8 = 6
-    public static let config: UInt8 = 7
     public static let displayPower: UInt8 = 8
     public static let launch: UInt8 = 9
-    public static let record: UInt8 = 10
     public static let pointer: UInt8 = 11
 
     public static let back: UInt8 = 1
@@ -23,6 +21,10 @@ public enum ControlCodec {
     public static let power: UInt8 = 6
     public static let wake: UInt8 = 7
     public static let sleep: UInt8 = 8
+
+    public static let pointerMove: UInt8 = 0
+    public static let pointerDown: UInt8 = 1
+    public static let pointerUp: UInt8 = 2
 
     public static let flagScreenOff: UInt8 = 1
     public static let flagAudioOnly: UInt8 = 2
@@ -57,14 +59,6 @@ public enum ControlCodec {
 
     public static func displayPower(on: Bool) -> Data { Data([Self.displayPower, on ? 1 : 0]) }
 
-    public static func record(on: Bool) -> Data { Data([Self.record, on ? 1 : 0]) }
-
-    public static func config(width: UInt16, height: UInt16, fps: UInt8, bitrate: UInt32, limit: UInt16, codec: UInt8, flags: UInt8) -> Data {
-        var d = Data([Self.config])
-        d.append(u16(width)); d.append(u16(height)); d.append(fps); d.append(u32(bitrate))
-        d.append(u16(limit)); d.append(codec); d.append(flags)
-        return d
-    }
 
     public static func pointer(action: UInt8, buttons: UInt8, x: UInt16, y: UInt16, dx: Int16 = 0, dy: Int16 = 0) -> Data {
         var d = Data([Self.pointer, action, buttons])

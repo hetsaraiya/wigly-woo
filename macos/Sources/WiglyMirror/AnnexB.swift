@@ -62,13 +62,14 @@ public enum AnnexB {
     }
 
     private static func splitLengths(_ data: Data) -> [Data] {
+        let bytes = [UInt8](data) // index from 0 even when data is a slice
         var nals: [Data] = []
         var offset = 0
-        while offset + 4 <= data.count {
-            let len = Int(data[offset]) << 24 | Int(data[offset + 1]) << 16 | Int(data[offset + 2]) << 8 | Int(data[offset + 3])
+        while offset + 4 <= bytes.count {
+            let len = Int(bytes[offset]) << 24 | Int(bytes[offset + 1]) << 16 | Int(bytes[offset + 2]) << 8 | Int(bytes[offset + 3])
             offset += 4
-            guard len > 0, offset + len <= data.count else { break }
-            nals.append(data.subdata(in: offset..<(offset + len)))
+            guard len > 0, offset + len <= bytes.count else { break }
+            nals.append(Data(bytes[offset..<(offset + len)]))
             offset += len
         }
         return nals

@@ -7,12 +7,7 @@ interface IPrivilegedMirror {
     void destroy() = 16777114;
     String start(in ParcelFileDescriptor video, in ParcelFileDescriptor audio, in ParcelFileDescriptor control, in ParcelFileDescriptor meta, String configJson) = 1;
     void stop() = 2;
-    void setScreenPower(boolean on) = 3;
-    String capabilities() = 4;
     String bringUpHotspot() = 5;
-    String joinWifi(String ssid, String psk) = 6;
-    String listSavedNetworks() = 7;
-    /** near is decided in the app process, which owns the BLE scan. */
+    /** near is decided in the app process, which hears the Mac's presence reports. */
     String unlock(String pin, boolean near) = 8;
-    String runPower(String action) = 9;
 }

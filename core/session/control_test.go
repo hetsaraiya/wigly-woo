@@ -28,22 +28,6 @@ func TestKeyLayout(t *testing.T) {
 	}
 }
 
-func TestConfigLayout(t *testing.T) {
-	b := Config(1080, 2400, 60, 8_000_000, 1080, CodecHEVC, ConfigFlagScreenOff)
-	if b[0] != CtrlConfig || len(b) != 14 {
-		t.Fatalf("config %d bytes type %d", len(b), b[0])
-	}
-	if binary.BigEndian.Uint16(b[1:3]) != 1080 || binary.BigEndian.Uint16(b[3:5]) != 2400 {
-		t.Fatalf("size %x", b)
-	}
-	if b[5] != 60 || binary.BigEndian.Uint32(b[6:10]) != 8_000_000 {
-		t.Fatalf("rate %x", b)
-	}
-	if b[12] != CodecHEVC || b[13] != ConfigFlagScreenOff {
-		t.Fatalf("tail %v", b[12:])
-	}
-}
-
 func TestVideoFlags(t *testing.T) {
 	cfg := EncodeMedia(0, 0, 1, []byte{1, 2, 3})
 	if VideoFlags(cfg) != FlagKeyframe {

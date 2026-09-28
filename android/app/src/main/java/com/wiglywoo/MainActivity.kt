@@ -5,7 +5,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
-import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -61,6 +60,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import android.media.projection.MediaProjectionManager
 import com.google.mlkit.vision.barcode.common.Barcode
+import com.wiglywoo.ecosystem.ContinuitySettings
 import com.wiglywoo.mirror.MirrorHost
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
@@ -68,31 +68,10 @@ import java.io.File
 import java.util.Locale
 
 class MainActivity : ComponentActivity() {
-
-    private var multicastLock: WifiManager.MulticastLock? = null
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        var startupError: String? = null
-        CoreBridge.load()
-        if (CoreBridge.loadError != null) {
-            startupError = "Native library load failed:\n\n" + CoreBridge.loadError!!.stackTraceToString()
-        } else {
-            try {
-                val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-                multicastLock = wifi.createMulticastLock("wigly-woo").apply {
-                    setReferenceCounted(true)
-                    acquire()
-                }
-                val saveDir = File(getExternalFilesDir(null), "incoming").apply { mkdirs() }
-                WooState.initialize(this)
-                val rc = CoreBridge.start(name = CompanionConfig.deviceName(this), saveDir = saveDir.absolutePath)
-                if (rc != 0) startupError = "woo_start returned $rc"
-            } catch (t: Throwable) {
-                startupError = "Core start failed:\n\n" + t.stackTraceToString()
-            }
-        }
+        val startupError = WooState.ensureCore(this)
 
         CompanionManager.initialize(applicationContext)
         if (CompanionConfig.load(this).enabled) {
@@ -110,13 +89,6 @@ class MainActivity : ComponentActivity() {
     override fun onPause() {
         WooState.foreground = false
         super.onPause()
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        CoreBridge.listener = null
-        CoreBridge.stop()
-        multicastLock?.let { if (it.isHeld) it.release() }
     }
 }
 
@@ -378,7 +350,7 @@ private fun MainScreen() {
                                         val mpm = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
                                         projectionLauncher.launch(mpm.createScreenCaptureIntent())
                                     },
-                                    onStopMirror = { MirrorHost.stop("Stopped on the phone") },
+                                    onStopMirror = { MirrorHost.stopFromPhone() },
                                 )
                             }
                         }
@@ -836,6 +808,8 @@ private fun CompanionScreen(
                 WWButton(if (kbEnabled) "Select" else "Enable", Kind.Ghost, minHeight = 44.dp, onClick = onKeyboard)
             }
         }
+
+        ContinuitySettings(Modifier.alpha(if (connected) 1f else 0.55f))
 
         WWButton(if (connected && config.clipboardEnabled) "Send clipboard to Mac" else "Clipboard unavailable",
             Kind.Primary, Modifier.fillMaxWidth(), enabled = connected && config.clipboardEnabled, onClick = onSendClipboard)

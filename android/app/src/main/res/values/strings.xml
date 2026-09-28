@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="accessibility_description">Basic phone mirroring when Shizuku is not running. Wigly Woo can tap and swipe, and can read a browser address bar when you turn handoff on.</string>
+    <string name="accessibility_description">Basic phone mirroring when Shizuku is not running. Wigly Woo taps and swipes where you click on your Mac. It does not read the screen.</string>
     <string name="mirror_watching">Mac is viewing your screen</string>
     <string name="mirror_stop">Stop</string>
 </resources>

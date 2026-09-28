@@ -46,7 +46,8 @@ object ProjectionFallback {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
             setInteger(MediaFormat.KEY_BIT_RATE, 6_000_000)
             setInteger(MediaFormat.KEY_FRAME_RATE, 30)
-            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 10)
+            if (Build.VERSION.SDK_INT >= 29) setInteger(MediaFormat.KEY_PREPEND_HEADER_TO_SYNC_FRAMES, 1)
             if (Build.VERSION.SDK_INT >= 30) setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
         }
         val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
@@ -61,17 +62,27 @@ object ProjectionFallback {
         Thread {
             val info = MediaCodec.BufferInfo()
             while (running) {
-                val index = codec.dequeueOutputBuffer(info, 10_000)
-                if (index < 0 || info.size <= 0) continue
-                val buf = codec.getOutputBuffer(index) ?: continue
-                val configBuf = info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0
-                val key = info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0
-                MediaWire.write(video, if (configBuf) 0 else 1, if (key || configBuf) 1 else 0, info.presentationTimeUs * 1000, buf, info.offset, info.size)
-                codec.releaseOutputBuffer(index, false)
+                val index = runCatching { codec.dequeueOutputBuffer(info, 10_000) }.getOrDefault(-1)
+                if (index < 0) continue
+                try {
+                    val buf = codec.getOutputBuffer(index)
+                    if (buf != null && info.size > 0) {
+                        val configBuf = info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0
+                        val key = info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0
+                        runCatching {
+                            MediaWire.write(video, if (configBuf) 0 else 1, if (key || configBuf) 1 else 0, info.presentationTimeUs * 1000, buf, info.offset, info.size)
+                        }
+                    }
+                } finally {
+                    runCatching { codec.releaseOutputBuffer(index, false) }
+                }
             }
         }.start()
         if (control != null) {
-            val ctrl = Controller(control, { w }, { h }, object : Controller.Actions {
+            // Gestures use real screen pixels, not the scaled video size.
+            val screenW = metrics.widthPixels
+            val screenH = metrics.heightPixels
+            val ctrl = Controller(control, { screenW }, { screenH }, object : Controller.Actions {
                 override fun screenPower(on: Boolean) {}
                 override fun expand(settings: Boolean) {}
                 override fun launch(component: String) {
@@ -80,11 +91,18 @@ object ProjectionFallback {
                     }
                 }
                 override fun clipboard(text: String) {}
-                override fun reconfigure(width: Int, height: Int, fps: Int, bitrate: Int, limit: Int, codec: Int, flags: Int) {}
-                override fun record(on: Boolean) {}
+                override fun syncFrame() {
+                    runCatching { encoder?.setParameters(android.os.Bundle().apply { putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0) }) }
+                }
+                private var downX = 0f
+                private var downY = 0f
+                private var downAt = 0L
                 override fun gesture(action: Int, x: Float, y: Float): Boolean {
                     val svc = WiglyAccessibilityService.instance ?: return false
-                    if (action == MotionEvent.ACTION_UP) svc.tap(x, y)
+                    when (action) {
+                        MotionEvent.ACTION_DOWN -> { downX = x; downY = y; downAt = System.currentTimeMillis() }
+                        MotionEvent.ACTION_UP -> svc.stroke(downX, downY, x, y, System.currentTimeMillis() - downAt)
+                    }
                     return true
                 }
             })

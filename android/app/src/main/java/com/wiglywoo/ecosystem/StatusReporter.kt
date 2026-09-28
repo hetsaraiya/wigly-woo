@@ -12,10 +12,15 @@ import android.telephony.TelephonyManager
 import com.wiglywoo.CompanionManager
 import org.json.JSONObject
 
-/** Sends battery, radio, and Do Not Disturb when they change. Never polls. */
+/**
+ * Sends battery, radio, and Do Not Disturb to the Mac. Battery and ringer
+ * changes arrive as broadcasts; signal strength has none, so a slow tick
+ * catches it. Identical reports are not re-sent.
+ */
 class StatusReporter(private val context: Context) {
     private val main = Handler(Looper.getMainLooper())
     private var last = ""
+    private var started = false
 
     private val tick = object : Runnable {
         override fun run() {
@@ -24,36 +29,36 @@ class StatusReporter(private val context: Context) {
         }
     }
 
+    private val receiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(ctx: Context?, intent: Intent?) { publish() }
+    }
+
     fun start() {
+        if (started) return
+        started = true
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_BATTERY_CHANGED)
             addAction(Intent.ACTION_POWER_CONNECTED)
             addAction(Intent.ACTION_POWER_DISCONNECTED)
             addAction(AudioManager.RINGER_MODE_CHANGED_ACTION)
         }
-        context.registerReceiver(receiver, filter)
+        androidx.core.content.ContextCompat.registerReceiver(
+            context, receiver, filter, androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
         main.post(tick)
     }
 
-    private val receiver = object : android.content.BroadcastReceiver() {
-        override fun onReceive(ctx: Context?, intent: Intent?) { publish() }
-    }
-
-    fun publish() {
-        if (!EcosystemSettings.load(context).status) return
+    private fun publish() {
+        if (!EcosystemSettings.enabled(context, EcosystemSettings.Feature.STATUS)) return
         val battery = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         val level = battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
         val scale = battery?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
         val plugged = battery?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0
-        val wifi = context.applicationContext.getSystemService(WifiManager::class.java)
         @Suppress("DEPRECATION")
-        val ssid = wifi.connectionInfo?.ssid?.trim('"') ?: ""
+        val ssid = context.getSystemService(WifiManager::class.java)?.connectionInfo?.ssid?.trim('"').orEmpty()
+            .takeUnless { it == "<unknown ssid>" }.orEmpty() // hidden without Location permission
         val dnd = (context.getSystemService(android.app.NotificationManager::class.java)
-            ?.currentInterruptionFilter ?: 0) != android.app.NotificationManager.INTERRUPTION_FILTER_ALL
-        val signal = runCatching {
-            val tm = context.getSystemService(TelephonyManager::class.java)
-            tm?.signalStrength?.level
-        }.getOrNull()
+            ?.currentInterruptionFilter ?: 0).let { it != 0 && it != android.app.NotificationManager.INTERRUPTION_FILTER_ALL }
+        val signal = runCatching { context.getSystemService(TelephonyManager::class.java)?.signalStrength?.level }.getOrNull()
         val payload = JSONObject()
             .put("type", "phone_status")
             .put("battery", if (scale > 0) level * 100 / scale else level)

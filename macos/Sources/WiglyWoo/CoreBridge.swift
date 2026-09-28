@@ -9,20 +9,6 @@ struct Peer: Identifiable, Decodable, Hashable {
     let addr: String
     let port: Int
     let fingerprint: String
-    var caps: UInt32 = 0
-    var session: Int = 0
-
-    enum CodingKeys: String, CodingKey { case id, name, addr, port, fingerprint, caps, session }
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        id = try c.decode(String.self, forKey: .id)
-        name = try c.decode(String.self, forKey: .name)
-        addr = try c.decode(String.self, forKey: .addr)
-        port = try c.decode(Int.self, forKey: .port)
-        fingerprint = try c.decode(String.self, forKey: .fingerprint)
-        caps = try c.decodeIfPresent(UInt32.self, forKey: .caps) ?? 0
-        session = try c.decodeIfPresent(Int.self, forKey: .session) ?? 0
-    }
 }
 
 struct Identity: Decodable {
@@ -100,6 +86,12 @@ final class CoreBridge: ObservableObject {
     @Published var pendingTrust: TrustRequest?
     /// TCP port of this Mac's media session, from the core identity.
     @Published var sessionPort: Int = 0
+
+    /// The discovered peer that is the paired phone, falling back to the only peer.
+    var pairedPeer: Peer? {
+        let fp = CompanionBridge.shared.phoneFingerprint
+        return peers.first { !fp.isEmpty && $0.fingerprint == fp } ?? (peers.count == 1 ? peers.first : nil)
+    }
     /// Files waiting to go out after the current send.
     @Published private(set) var queue: [QueuedSend] = []
     @Published private(set) var sent: [SentRecord] = []
@@ -191,9 +183,9 @@ final class CoreBridge: ObservableObject {
 
         switch type {
         case "peer_found":
-            if let p = try? JSONDecoder().decode(Peer.self, from: data) {
-                if let index = peers.firstIndex(where: { $0.id == p.id }) { peers[index] = p }
-                else { peers.append(p) }
+            if let p = try? JSONDecoder().decode(Peer.self, from: data),
+               !peers.contains(where: { $0.id == p.id }) {
+                peers.append(p)
             }
         case "trust_request":
             let req = TrustRequest(

@@ -22,6 +22,14 @@ func EncodeMedia(kind, flags byte, pts uint64, payload []byte) []byte {
 	return out
 }
 
+// AudioFlags maps an audio datagram onto mux flags. Codec config is kept.
+func AudioFlags(payload []byte) byte {
+	if len(payload) >= 1 && payload[0] == 0 {
+		return 0
+	}
+	return FlagDroppable
+}
+
 // VideoFlags maps a media datagram onto mux flags.
 // Codec config is a keyframe and is not droppable. A frame is droppable, and
 // a keyframe when flags bit 0 is set. Anything that is not a media datagram

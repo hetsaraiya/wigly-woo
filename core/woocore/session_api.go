@@ -2,33 +2,15 @@ package woocore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
-	"github.com/wiglywoo/core/discovery"
-	"github.com/wiglywoo/core/link"
 	"github.com/wiglywoo/core/session"
 )
 
-func (c *Core) snapshotBeacon() discovery.Beacon {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return discovery.Beacon{
-		ID:          c.identity.Fingerprint,
-		Name:        c.cfg.Name,
-		Port:        c.cfg.Port,
-		Fingerprint: c.identity.Fingerprint,
-		Caps:        c.caps,
-		Session:     c.sessionPort,
-	}
-}
-
-// SetCaps updates the capability bits on the next beacon.
-func (c *Core) SetCaps(caps uint32) {
-	c.mu.Lock()
-	c.caps = caps
-	c.mu.Unlock()
-}
+// dialRetry spaces attempts while the listener learns our fingerprint.
+const dialRetry = 500 * time.Millisecond
 
 // SessionPort is the TCP port of the media listener, or 0 if it failed to bind.
 func (c *Core) SessionPort() int {
@@ -54,16 +36,10 @@ func (c *Core) allowFingerprint(fingerprint string) bool {
 	return ok
 }
 
-// SetLevers installs the shell's radio callbacks.
-func (c *Core) SetLevers(levers link.Levers) { c.manager.SetLevers(levers) }
-
-// ConfigureHotspot arms hosting or joining. See link.HotspotOff, HotspotHost, HotspotJoin.
-func (c *Core) ConfigureHotspot(mode int, ssid, psk string) {
-	c.manager.ConfigureHotspot(mode, ssid, psk)
-}
-
 // DialSession opens a session to addr and requires peerFingerprint.
-// The result arrives as SessionOpen or SessionError.
+// The result arrives as SessionOpen or SessionError. The listener may not have
+// allowed our certificate yet (that news travels over the relay), so a
+// rejected dial is retried until the deadline.
 func (c *Core) DialSession(addr, peerFingerprint string) {
 	if addr == "" || peerFingerprint == "" {
 		c.emit(SessionError{Message: "session dial needs an address and fingerprint"})
@@ -72,14 +48,25 @@ func (c *Core) DialSession(addr, peerFingerprint string) {
 	go func() {
 		ctx, cancel := context.WithTimeout(c.ctx, 8*time.Second)
 		defer cancel()
-		conn, err := session.Dial(ctx, addr, c.identity, peerFingerprint)
-		if err != nil {
-			if c.ctx.Err() == nil {
-				c.emit(SessionError{Message: "session dial: " + err.Error()})
+		for {
+			conn, err := session.Dial(ctx, addr, c.identity, peerFingerprint)
+			if err == nil {
+				c.track(conn)
+				return
 			}
-			return
+			retry := !errors.Is(err, session.ErrFingerprint)
+			select {
+			case <-ctx.Done():
+				retry = false
+			case <-time.After(dialRetry):
+			}
+			if !retry {
+				if c.ctx.Err() == nil {
+					c.emit(SessionError{Message: "session dial: " + err.Error()})
+				}
+				return
+			}
 		}
-		c.track(conn)
 	}()
 }
 

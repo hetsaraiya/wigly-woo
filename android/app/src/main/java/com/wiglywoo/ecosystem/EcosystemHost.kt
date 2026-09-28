@@ -2,89 +2,92 @@ package com.wiglywoo.ecosystem
 
 import android.content.Context
 import android.content.Intent
-import android.media.AudioManager
+import android.media.AudioAttributes
+import android.media.RingtoneManager
 import android.net.Uri
-import android.provider.Settings
+import android.os.Handler
+import android.os.Looper
 import com.wiglywoo.CompanionManager
+import com.wiglywoo.ecosystem.EcosystemSettings.Feature
 import com.wiglywoo.mirror.ShizukuMirrorBridge
-import com.wiglywoo.mirror.WiglyAccessibilityService
 import org.json.JSONObject
+import java.util.concurrent.Executors
 
 /** Starts the continuity reporters and handles the Mac's relay messages. */
 object EcosystemHost {
+    private val main = Handler(Looper.getMainLooper())
+    // Hotspot and unlock block on the Shizuku binder; the relay thread must not.
+    private val worker = Executors.newSingleThreadExecutor()
+    @Volatile private var app: Context? = null
+    private var status: StatusReporter? = null
     private var calls: CallBridge? = null
     private var sms: SmsBridge? = null
     private var media: MediaBridge? = null
+    private var screenshots: ScreenshotWatcher? = null
 
     fun install(context: Context) {
-        val app = context.applicationContext
-        StatusReporter(app).start()
-        ScreenshotWatcher(app).start()
-        calls = CallBridge(app).also { it.start() }
-        sms = SmsBridge(app).also { it.start() }
-        media = MediaBridge(app).also { it.start() }
-        BlePresence.start(app)
+        val ctx = context.applicationContext
+        app = ctx
+        status = StatusReporter(ctx)
+        calls = CallBridge(ctx)
+        sms = SmsBridge(ctx)
+        media = MediaBridge(ctx)
+        screenshots = ScreenshotWatcher(ctx)
+        refresh()
+    }
+
+    /** Starts or stops each feature to match its toggle and permissions. Safe to call often. */
+    fun refresh() = main.post {
+        val ctx = app ?: return@post
+        status?.start()
+        media?.start()
+        calls?.update(EcosystemSettings.active(ctx, Feature.CALLS))
+        sms?.update(EcosystemSettings.active(ctx, Feature.SMS))
+        screenshots?.update(EcosystemSettings.active(ctx, Feature.SCREENSHOTS))
+        BlePresence.update(ctx, EcosystemSettings.active(ctx, Feature.PRESENCE))
     }
 
     fun onRelay(message: JSONObject) {
-        val ctx = appOrNull() ?: return
+        val ctx = app ?: return
         when (message.optString("type")) {
-            "ring" -> if (message.optString("target", "phone") == "phone") ring(ctx)
-            "lock" -> ShizukuMirrorBridge.runPower(if (message.optString("target") == "phone") "sleep" else "lock")
-            "wake" -> ShizukuMirrorBridge.runPower("wake")
+            "ring" -> main.post { ring(ctx) }
             "call_answer" -> calls?.answer()
             "call_decline" -> calls?.decline()
-            "call_dial" -> calls?.dial(message.optString("number"))
             "sms_send" -> sms?.send(message.optString("address"), message.optString("body"))
             "media" -> media?.command(message.optString("command"))
             "handoff" -> open(ctx, message.optString("url"))
-            "focus" -> setDnd(ctx, message.optBoolean("enabled"))
-            "hotspot_request" -> offerHotspot()
-            "wifi_share" -> ShizukuMirrorBridge.joinWifi(message.optString("ssid"), message.optString("psk"))
-            "wifi_request" -> shareCurrent(ctx)
-            "continue_on_mac" -> continueOnMac()
-            "capture_request" -> CompanionManager.send(JSONObject().put("type", "capture_ready").put("mode", message.optString("mode")))
-            "otp_type" -> if (EcosystemSettings.load(ctx).otpType) typeOtp(message.optString("code"))
+            "hotspot_request" -> worker.execute { offerHotspot() }
             "presence" -> BlePresence.near = message.optBoolean("near", true)
-            "sketch_request" -> SketchActivity.open(ctx)
+            "unlock" -> {
+                val pin = message.optString("pin").toCharArray()
+                worker.execute { unlock(pin) }
+            }
         }
     }
 
     fun onNotification(app: String, text: String) {
-        if (EcosystemSettings.load(appOrNull() ?: return).otp) OtpDetector.consider(app, text)
+        val ctx = this.app ?: return
+        if (EcosystemSettings.enabled(ctx, Feature.OTP)) OtpDetector.consider(app, text)
     }
 
+    /** Alarm sound for eight seconds. The alarm stream plays even when the ringer is silent. */
     private fun ring(context: Context) {
-        val audio = context.getSystemService(AudioManager::class.java) ?: return
-        audio.ringerMode = AudioManager.RINGER_MODE_NORMAL
-        val tone = android.media.RingtoneManager.getRingtone(
-            context, android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM))
-        tone?.play()
-        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ tone?.stop() }, 8_000)
+        val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE) ?: return
+        val tone = RingtoneManager.getRingtone(context, uri) ?: return
+        tone.audioAttributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).build()
+        tone.play()
+        main.postDelayed({ tone.stop() }, 8_000)
     }
 
     private fun open(context: Context, url: String) {
-        if (!url.startsWith("http")) return
+        if (!url.startsWith("http://") && !url.startsWith("https://")) return
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         runCatching { context.startActivity(intent) }
     }
 
-    private fun setDnd(context: Context, enabled: Boolean) {
-        if (!EcosystemSettings.load(context).focus) return
-        val nm = context.getSystemService(android.app.NotificationManager::class.java) ?: return
-        if (!nm.isNotificationPolicyAccessGranted) {
-            runCatching {
-                context.startActivity(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            }
-            return
-        }
-        nm.setInterruptionFilter(if (enabled) android.app.NotificationManager.INTERRUPTION_FILTER_PRIORITY
-            else android.app.NotificationManager.INTERRUPTION_FILTER_ALL)
-    }
-
     private fun offerHotspot() {
-        val json = ShizukuMirrorBridge.bringUpHotspot()
-        val obj = runCatching { JSONObject(json) }.getOrNull() ?: return
+        val obj = runCatching { JSONObject(ShizukuMirrorBridge.bringUpHotspot()) }.getOrNull() ?: return
         if (obj.has("ssid")) {
             CompanionManager.send(JSONObject().put("type", "hotspot_offer").put("ssid", obj.optString("ssid")).put("psk", obj.optString("psk")))
         } else {
@@ -92,26 +95,9 @@ object EcosystemHost {
         }
     }
 
-    private fun shareCurrent(context: Context) {
-        val json = ShizukuMirrorBridge.listSavedNetworks()
-        CompanionManager.send(JSONObject().put("type", "wifi_offer").put("networks", json))
+    private fun unlock(pin: CharArray) {
+        val result = ShizukuMirrorBridge.unlock(pin, near = BlePresence.near)
+        val error = runCatching { JSONObject(result).optString("error") }.getOrDefault("")
+        CompanionManager.send(JSONObject().put("type", "unlock_result").put("ok", result == "ok").put("reason", error))
     }
-
-    private fun continueOnMac() {
-        val url = WiglyAccessibilityService.instance?.chromeUrl() ?: return
-        CompanionManager.send(JSONObject().put("type", "handoff").put("url", url).put("direction", "to-mac"))
-    }
-
-    private fun typeOtp(code: String) {
-        // The IME is the supported way to type. Put the code on the clipboard
-        // the keyboard already watches, and let the user paste if auto-type is off.
-        if (code.isBlank()) return
-        CompanionManager.forwardClipboardText(code)
-    }
-
-    private fun appOrNull(): Context? = holder
-
-    @Volatile private var holder: Context? = null
-
-    fun remember(context: Context) { holder = context.applicationContext }
 }
