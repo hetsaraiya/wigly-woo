@@ -1,0 +1,8 @@
+Wigly Woo is distributed under the MIT license (see LICENSE).
+
+Phone mirroring follows the architecture proved by scrcpy
+(https://github.com/Genymobile/scrcpy), which is licensed under the
+Apache License, Version 2.0. The virtual-display encoder, playback-audio
+capture, and input-injection approach in android/.../mirror/ are an
+original implementation of that design, not a copy of scrcpy's sources.
+The Apache-2.0 license is compatible with this project's MIT license.

@@ -101,7 +101,9 @@ func woo_identity_json() *C.char {
 		return C.CString("{}")
 	}
 	id := c.Identity()
-	b, _ := json.Marshal(map[string]any{"name": id.Name, "fingerprint": id.Fingerprint})
+	b, _ := json.Marshal(map[string]any{
+		"name": id.Name, "fingerprint": id.Fingerprint, "session": c.SessionPort(),
+	})
 	return C.CString(string(b)) // caller frees via woo_free
 }
 

@@ -99,3 +99,42 @@ JNIEXPORT void JNICALL
 Java_com_wiglywoo_CoreBridge_nativeCancel(JNIEnv* env, jobject thiz) {
     woo_cancel();
 }
+
+JNIEXPORT void JNICALL
+Java_com_wiglywoo_CoreBridge_nativeSetCaps(JNIEnv* env, jobject thiz, jint caps) {
+    woo_set_caps((unsigned int)caps);
+}
+
+JNIEXPORT void JNICALL
+Java_com_wiglywoo_CoreBridge_nativeSessionAllow(JNIEnv* env, jobject thiz, jstring fp) {
+    const char* s = (*env)->GetStringUTFChars(env, fp, NULL);
+    woo_session_allow(s);
+    (*env)->ReleaseStringUTFChars(env, fp, s);
+}
+
+JNIEXPORT jint JNICALL
+Java_com_wiglywoo_CoreBridge_nativeSessionDial(JNIEnv* env, jobject thiz, jstring addr, jstring fp) {
+    const char* a = (*env)->GetStringUTFChars(env, addr, NULL);
+    const char* f = (*env)->GetStringUTFChars(env, fp, NULL);
+    int rc = woo_session_dial(a, f);
+    (*env)->ReleaseStringUTFChars(env, addr, a);
+    (*env)->ReleaseStringUTFChars(env, fp, f);
+    return rc;
+}
+
+JNIEXPORT void JNICALL
+Java_com_wiglywoo_CoreBridge_nativeSessionClose(JNIEnv* env, jobject thiz, jstring id) {
+    const char* s = (*env)->GetStringUTFChars(env, id, NULL);
+    woo_session_close(s);
+    (*env)->ReleaseStringUTFChars(env, id, s);
+}
+
+JNIEXPORT jint JNICALL
+Java_com_wiglywoo_CoreBridge_nativeHotspotConfigure(JNIEnv* env, jobject thiz, jint mode, jstring ssid, jstring psk) {
+    const char* s = (*env)->GetStringUTFChars(env, ssid, NULL);
+    const char* p = (*env)->GetStringUTFChars(env, psk, NULL);
+    int rc = woo_hotspot_configure(mode, s, p);
+    (*env)->ReleaseStringUTFChars(env, ssid, s);
+    (*env)->ReleaseStringUTFChars(env, psk, p);
+    return rc;
+}

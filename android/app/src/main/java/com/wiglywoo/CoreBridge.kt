@@ -32,6 +32,11 @@ object CoreBridge {
     private external fun nativeSendFd(peerId: String, fd: Int, name: String, size: Long): Int
     private external fun nativeTrust(fingerprint: String, ok: Int)
     private external fun nativeCancel()
+    private external fun nativeSetCaps(caps: Int)
+    private external fun nativeSessionAllow(fingerprint: String)
+    private external fun nativeSessionDial(addr: String, fingerprint: String): Int
+    private external fun nativeSessionClose(id: String)
+    private external fun nativeHotspotConfigure(mode: Int, ssid: String, psk: String): Int
 
     /** Set by the UI to receive event envelopes (already on a worker thread). */
     @Volatile
@@ -57,6 +62,14 @@ object CoreBridge {
 
     /** Abort the active transfer(s) in either direction. */
     fun cancel() = nativeCancel()
+
+    fun setCaps(caps: Int) { if (loadError == null) runCatching { nativeSetCaps(caps) } }
+    fun allowFingerprint(fingerprint: String) { if (loadError == null) runCatching { nativeSessionAllow(fingerprint) } }
+    fun dialSession(addr: String, fingerprint: String) { if (loadError == null) runCatching { nativeSessionDial(addr, fingerprint) } }
+    fun closeSession(id: String) { if (loadError == null && id.isNotEmpty()) runCatching { nativeSessionClose(id) } }
+    fun configureHotspot(mode: Int, ssid: String = "", psk: String = "") {
+        if (loadError == null) runCatching { nativeHotspotConfigure(mode, ssid, psk) }
+    }
 
     /** Called from JNI (woo_jni.c) for every core event. */
     @JvmStatic
