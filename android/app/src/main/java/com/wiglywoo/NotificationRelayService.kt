@@ -42,7 +42,7 @@ class NotificationRelayService : NotificationListenerService() {
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         val config = CompanionConfig.load(this)
-        if (!config.enabled || !config.notificationsEnabled || sbn.packageName == packageName) return
+        if (!config.enabled || !config.notificationsEnabled || sbn.packageName in SKIPPED_PACKAGES + packageName) return
         val n = sbn.notification
         if (n.flags and Notification.FLAG_GROUP_SUMMARY != 0) return
         val extras = n.extras
@@ -75,6 +75,11 @@ class NotificationRelayService : NotificationListenerService() {
                 .put("type", "notification_removed")
                 .put("notificationKey", sbn.key))
         }
+    }
+
+    private companion object {
+        // System chrome (screenshots, USB debugging, charging) is noise on the Mac.
+        val SKIPPED_PACKAGES = setOf("android", "com.android.systemui")
     }
 
     private fun reply(key: String, text: String) {

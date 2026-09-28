@@ -612,7 +612,24 @@ private struct CompanionScreen: View {
     private var phone: String { config.phoneName }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 40) {
+        // Two columns only when the main column keeps a comfortable measure;
+        // otherwise the keyboard drops below and everything stays one column.
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .top, spacing: 40) {
+                main.frame(minWidth: 440, maxWidth: .infinity, alignment: .leading)
+                keyboard.frame(width: 290)
+            }
+            .frame(maxWidth: 800, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: 40) {
+                main
+                keyboard
+            }
+            .frame(maxWidth: 560, alignment: .leading)
+        }
+    }
+
+    private var main: some View {
             VStack(alignment: .leading, spacing: 40) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Companion").font(WWFont.serif(34, .semibold))
@@ -642,11 +659,6 @@ private struct CompanionScreen: View {
                 }
                 .opacity(connected ? 1 : 0.55)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            keyboard.frame(width: 290)
-        }
-        .frame(maxWidth: 800, alignment: .leading)
     }
 
     private var notificationDetail: String {
@@ -656,34 +668,43 @@ private struct CompanionScreen: View {
     }
 
     private var hero: some View {
-        let (title, detail, cta, action): (String, String, String?, (() -> Void)?) = {
+        // `urgent` CTAs are the next step; the rest are quiet links.
+        let (title, detail, cta, action, urgent): (String, String, String?, (() -> Void)?, Bool) = {
             let settings = { ui.showSettings = true }
             switch companion.status {
             case .notSet:
                 return ("Link your phone",
                         "Scan one code to sync notifications, clipboard and typing. Nearby sharing works without it.",
-                        "Pair phone", ui.startPairing)
+                        "Pair phone", ui.startPairing, true)
             case .paused:
                 return ("Companion paused", "Your pairing is saved. Resume whenever you like.", "Resume",
-                        { config.enabled = true; config.save() })
+                        { config.enabled = true; config.save() }, true)
             case .connecting:
-                return ("Connecting to \(phone)…", "This usually takes a moment.", nil, nil)
+                return ("Connecting to \(phone)…", "This usually takes a moment.", nil, nil, false)
             case .connected:
                 let since = companion.connectedSince.map { " since \(DateFormatter.localizedString(from: $0, dateStyle: .none, timeStyle: .short))" } ?? ""
-                return ("\(capitalized(phone)) is connected", "Encrypted relay\(since).", "Manage", settings)
+                return ("\(capitalized(phone)) is connected", "Encrypted relay\(since).", "Manage", settings, false)
             case .error:
-                return ("Reconnecting", "Retrying on its own. Nearby sharing still works.", "Check settings", settings)
+                return ("Reconnecting", "Retrying on its own. Nearby sharing still works.", "Check settings", settings, false)
             case .offline:
-                return ("Companion offline", "The link is on but not running.", "Open settings", settings)
+                return ("Companion offline", "The link is on but not running.", "Open settings", settings, true)
             }
         }()
-        return HStack(alignment: .top, spacing: 15) {
-            StatusDot(theme: theme, status: companion.status, size: 12).padding(.top, 10)
+        return HStack(alignment: .firstTextBaseline, spacing: 12) {
+            StatusDot(theme: theme, status: companion.status, size: 10)
+                .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
             VStack(alignment: .leading, spacing: 4) {
-                Text(title).font(WWFont.serif(25, .semibold))
-                Text(detail).font(WWFont.serif(14)).foregroundStyle(theme.muted)
-                    .frame(maxWidth: 420, alignment: .leading)
-                if let cta, let action {
+                Text(title).font(WWFont.serif(21, .semibold)).fixedSize(horizontal: false, vertical: true)
+                if urgent || cta == nil {
+                    Text(detail).font(WWFont.serif(14)).foregroundStyle(theme.muted)
+                        .frame(maxWidth: 420, alignment: .leading)
+                } else if let cta, let action {
+                    HStack(spacing: 6) {
+                        Text(detail).font(WWFont.serif(14)).foregroundStyle(theme.muted)
+                        Button(cta, action: action).wwButton(theme, .ghost)
+                    }
+                }
+                if urgent, let cta, let action {
                     Button(cta, action: action).wwButton(theme, .primary).padding(.top, 11)
                 }
             }

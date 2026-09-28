@@ -186,7 +186,7 @@ object CompanionManager {
     }
 
     private fun sendHello(reply: Boolean) {
-        send(JSONObject().put("type", "hello").put("name", android.os.Build.MODEL ?: "Android")
+        send(JSONObject().put("type", "hello").put("name", CompanionConfig.deviceName(app))
             .put("kind", "android").put("reply", reply))
     }
 

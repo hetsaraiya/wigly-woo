@@ -85,7 +85,7 @@ class MainActivity : ComponentActivity() {
                 }
                 val saveDir = File(getExternalFilesDir(null), "incoming").apply { mkdirs() }
                 WooState.initialize(this)
-                val rc = CoreBridge.start(name = Build.MODEL ?: "Android", saveDir = saveDir.absolutePath)
+                val rc = CoreBridge.start(name = CompanionConfig.deviceName(this), saveDir = saveDir.absolutePath)
                 if (rc != 0) startupError = "woo_start returned $rc"
             } catch (t: Throwable) {
                 startupError = "Core start failed:\n\n" + t.stackTraceToString()
