@@ -1,5 +1,6 @@
 import CoreMedia
 import Foundation
+import os
 import VideoToolbox
 
 /// Decodes one HEVC or H.264 access unit at a time and asks the display to
@@ -7,28 +8,36 @@ import VideoToolbox
 public final class VideoDecoder {
     public var onSample: ((CMSampleBuffer) -> Void)?
     public var onEncoded: ((CMSampleBuffer) -> Void)?
-    public private(set) var width: Int32 = 0
-    public private(set) var height: Int32 = 0
-    public private(set) var dropped = 0
-
-    private var format: CMVideoFormatDescription?
+    /// The current stream format, which a passthrough recorder needs as its hint.
+    public private(set) var format: CMVideoFormatDescription?
     private var session: VTDecompressionSession?
     private var hevc = true
     private var vps: [Data] = []
+    private let log = Logger(subsystem: "com.wiglywoo.macos", category: "mirror")
+    private var packets = 0, decoded = 0, failed = 0
+    private var lastLog = Date()
     private var sps: [Data] = []
     private var pps: [Data] = []
 
     public init() {}
 
     public func push(_ packet: Data) {
+        packets += 1
+        if Date().timeIntervalSince(lastLog) > 5 {
+            log.info("video: \(self.packets) packets, \(self.decoded) decoded, \(self.failed) failed, format \(self.format != nil)")
+            packets = 0; decoded = 0; failed = 0
+            lastLog = Date()
+        }
         guard let media = Datagram.media(packet) else { return }
         let nals = AnnexB.split(media.payload)
         if nals.isEmpty { return }
-        if media.kind == 0 || format == nil {
+        // Keyframes repeat the parameter sets, so a lost config packet is
+        // recovered at the next keyframe.
+        if media.kind == 0 || format == nil || media.flags & 1 != 0 {
             absorb(nals)
         }
         guard format != nil, media.kind == 1 else { return }
-        guard let sample = sample(from: nals, pts: media.pts) else { return }
+        guard let sample = sample(from: nals, pts: media.pts, keyframe: media.flags & 1 != 0) else { return }
         onEncoded?(sample)
         decode(sample)
     }
@@ -38,19 +47,27 @@ public final class VideoDecoder {
         session = nil
     }
 
+    /// Picks up parameter sets. The codec is decided by the presence of a VPS,
+    /// because some HEVC slice headers also parse as H.264 SPS/PPS. The
+    /// decoder is rebuilt only when the sets change.
     private func absorb(_ nals: [Data]) {
+        let isHEVC = nals.contains { AnnexB.hevcType($0) == 32 } || (format != nil && hevc)
+        var nextVPS = vps, nextSPS = sps, nextPPS = pps
         for nal in nals {
-            if let kind = AnnexB.hevcType(nal), kind == 32 || kind == 33 || kind == 34 {
-                hevc = true
-                if kind == 32 { vps = [nal] }
-                if kind == 33 { sps = [nal] }
-                if kind == 34 { pps = [nal] }
-            } else if let kind = AnnexB.avcType(nal), kind == 7 || kind == 8 {
-                hevc = false
-                if kind == 7 { sps = [nal] }
-                if kind == 8 { pps = [nal] }
+            if isHEVC, let kind = AnnexB.hevcType(nal) {
+                if kind == 32 { nextVPS = [nal] }
+                if kind == 33 { nextSPS = [nal] }
+                if kind == 34 { nextPPS = [nal] }
+            } else if !isHEVC, let kind = AnnexB.avcType(nal) {
+                if kind == 7 { nextSPS = [nal] }
+                if kind == 8 { nextPPS = [nal] }
             }
         }
+        if session != nil, hevc == isHEVC, nextVPS == vps, nextSPS == sps, nextPPS == pps { return }
+        hevc = isHEVC
+        vps = isHEVC ? nextVPS : []
+        sps = nextSPS
+        pps = nextPPS
         rebuild()
     }
 
@@ -58,17 +75,13 @@ public final class VideoDecoder {
         var desc: CMVideoFormatDescription?
         if hevc, !vps.isEmpty, !sps.isEmpty, !pps.isEmpty {
             createHEVC(vps + sps + pps, &desc)
-        } else if !sps.isEmpty, !pps.isEmpty {
-            hevc = false
+        } else if !hevc, !sps.isEmpty, !pps.isEmpty {
             createAVC(sps + pps, &desc)
         }
         guard let desc else { return }
         format = desc
         if let session { VTDecompressionSessionInvalidate(session) }
         session = nil
-        let dims = CMVideoFormatDescriptionGetDimensions(desc)
-        width = dims.width
-        height = dims.height
         var callback = VTDecompressionOutputCallbackRecord(
             decompressionOutputCallback: { refCon, _, status, _, image, pts, duration in
                 guard status == noErr, let image, let refCon else { return }
@@ -78,7 +91,11 @@ public final class VideoDecoder {
             decompressionOutputRefCon: Unmanaged.passUnretained(self).toOpaque())
         var made: VTDecompressionSession?
         let status = VTDecompressionSessionCreate(allocator: nil, formatDescription: desc, decoderSpecification: nil, imageBufferAttributes: nil, outputCallback: &callback, decompressionSessionOut: &made)
-        if status == noErr { session = made }
+        if status == noErr, let made {
+            // Output each frame as soon as it decodes; never pace or hold one.
+            VTSessionSetProperty(made, key: kVTDecompressionPropertyKey_RealTime, value: kCFBooleanTrue)
+            session = made
+        }
     }
 
     private func createHEVC(_ sets: [Data], _ desc: inout CMVideoFormatDescription?) {
@@ -99,7 +116,7 @@ public final class VideoDecoder {
         }
     }
 
-    private func sample(from nals: [Data], pts: UInt64) -> CMSampleBuffer? {
+    private func sample(from nals: [Data], pts: UInt64, keyframe: Bool) -> CMSampleBuffer? {
         guard let format else { return nil }
         let payload = AnnexB.lengthPrefixed(nals.filter { nal in
             if hevc, let t = AnnexB.hevcType(nal) { return t != 32 && t != 33 && t != 34 }
@@ -122,6 +139,8 @@ public final class VideoDecoder {
         if let sample {
             if let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: true) as? [NSMutableDictionary], let first = attachments.first {
                 first[kCMSampleAttachmentKey_DisplayImmediately as NSString] = true
+                // Lets a recorder start its file on a keyframe.
+                if !keyframe { first[kCMSampleAttachmentKey_NotSync as NSString] = true }
             }
         }
         return sample
@@ -129,17 +148,22 @@ public final class VideoDecoder {
 
     private func decode(_ sample: CMSampleBuffer) {
         guard let session else { return }
-        let flags = VTDecodeFrameFlags(rawValue: 0)
+        let flags: VTDecodeFrameFlags = [._1xRealTimePlayback]
         var info = VTDecodeInfoFlags()
         let status = VTDecompressionSessionDecodeFrame(session, sampleBuffer: sample, flags: flags, frameRefcon: nil, infoFlagsOut: &info)
-        if status != noErr { dropped += 1 }
+        if status == noErr { decoded += 1 } else { failed += 1 }
     }
 
     private func emit(image: CVImageBuffer, pts: CMTime, duration: CMTime) {
-        guard let format else { return }
+        // A decoded frame needs a format describing the image, not the
+        // compressed stream; the stream's format is rejected here.
+        var imageFormat: CMVideoFormatDescription?
+        guard CMVideoFormatDescriptionCreateForImageBuffer(allocator: nil, imageBuffer: image, formatDescriptionOut: &imageFormat) == noErr,
+              let imageFormat else { return }
         var timing = CMSampleTimingInfo(duration: duration, presentationTimeStamp: pts, decodeTimeStamp: .invalid)
         var sample: CMSampleBuffer?
-        if CMSampleBufferCreateForImageBuffer(allocator: nil, imageBuffer: image, dataReady: true, makeDataReadyCallback: nil, refcon: nil, formatDescription: format, sampleTiming: &timing, sampleBufferOut: &sample) != noErr { return }
+        if CMSampleBufferCreateReadyWithImageBuffer(allocator: nil, imageBuffer: image, formatDescription: imageFormat,
+                                                    sampleTiming: &timing, sampleBufferOut: &sample) != noErr { return }
         guard let sample else { return }
         if let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: true) as? [NSMutableDictionary], let first = attachments.first {
             first[kCMSampleAttachmentKey_DisplayImmediately as NSString] = true

@@ -55,7 +55,7 @@ func TestSessionRoundTripAndPriority(t *testing.T) {
 
 	// A late video frame and a control message. Control must arrive, and it
 	// must not be stuck behind the video datagram.
-	if err := sendMsg(dialCtl, Button(BtnBack), false); err != nil {
+	if err := writeFD(dialCtl, Button(BtnBack)); err != nil {
 		t.Fatal(err)
 	}
 	got, err := readUntil(accCtl, time.Second)
@@ -70,7 +70,7 @@ func TestSessionRoundTripAndPriority(t *testing.T) {
 	// accepted side's peer by using the dialer's still-open video remote.
 	dialVideo := dialed.remote[0]
 	frame := EncodeMedia(1, 1, 42, []byte{0xaa, 0xbb})
-	if err := sendMsg(dialVideo, frame, false); err != nil {
+	if err := writeFD(dialVideo, frame); err != nil {
 		t.Fatal(err)
 	}
 	got, err = readUntil(accVideo, time.Second)
@@ -79,6 +79,19 @@ func TestSessionRoundTripAndPriority(t *testing.T) {
 	}
 	if !bytes.Equal(got, frame) {
 		t.Fatalf("video %x", got)
+	}
+
+	// A keyframe-sized record, which a unix datagram could fail to carry.
+	big := EncodeMedia(1, 1, 43, bytes.Repeat([]byte{0x5a}, 900<<10))
+	if err := writeFD(dialVideo, big); err != nil {
+		t.Fatal(err)
+	}
+	got, err = readUntil(accVideo, 3*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, big) {
+		t.Fatalf("big video: %d bytes, want %d", len(got), len(big))
 	}
 }
 
@@ -136,15 +149,43 @@ func TestListenRejectsUnallowed(t *testing.T) {
 	}
 }
 
+// writeFD writes one record the way a shell does.
+func writeFD(fd int, payload []byte) error {
+	var buf bytes.Buffer
+	if err := writeRecord(&buf, payload); err != nil {
+		return err
+	}
+	b := buf.Bytes()
+	for len(b) > 0 {
+		n, err := syscall.Write(fd, b)
+		if err != nil && err != syscall.EINTR && err != syscall.EAGAIN {
+			return err
+		}
+		if n > 0 {
+			b = b[n:]
+		}
+	}
+	return nil
+}
+
+// readUntil reads one record from a shell socket, which has a receive timeout.
 func readUntil(fd int, d time.Duration) ([]byte, error) {
 	deadline := time.Now().Add(d)
+	var got []byte
 	buf := make([]byte, 64*1024)
 	for time.Now().Before(deadline) {
+		if len(got) >= recordHeader {
+			n := int(got[0])<<24 | int(got[1])<<16 | int(got[2])<<8 | int(got[3])
+			if len(got) >= recordHeader+n {
+				return got[recordHeader : recordHeader+n], nil
+			}
+		}
 		n, err := syscall.Read(fd, buf)
 		if n > 0 {
-			return append([]byte(nil), buf[:n]...), nil
+			got = append(got, buf[:n]...)
+			continue
 		}
-		if err != nil && !isRetryableRead(err) && !isTimeout(err) {
+		if err != nil && err != syscall.EAGAIN && err != syscall.EINTR {
 			return nil, err
 		}
 	}

@@ -5,8 +5,6 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.Drawable
-import android.net.wifi.WifiConfiguration
-import android.net.wifi.WifiManager
 import android.os.Binder
 import android.os.ParcelFileDescriptor
 import android.os.Process
@@ -32,9 +30,10 @@ class MirrorServer @JvmOverloads constructor(
     private var encoder: ScreenEncoder? = null
     private var audio: AudioCapture? = null
     private var controller: Controller? = null
-    private var videoOut: FileOutputStream? = null
     private var metaOut: FileOutputStream? = null
     private val kept = mutableListOf<ParcelFileDescriptor>()
+    /** Set while the Mac has the panel dark, so stop() can turn it back on. */
+    @Volatile private var panelOff = false
 
     override fun start(
         video: ParcelFileDescriptor?,
@@ -44,52 +43,51 @@ class MirrorServer @JvmOverloads constructor(
         configJson: String?,
     ): String {
         enforceCaller()
-        val ctx = context ?: return err("no context")
+        val base = context ?: return err("no context")
+        val shell = HiddenApi.shell(base)
         stop()
         val config = MirrorConfig.parse(configJson)
         return try {
             listOfNotNull(video, audioFd, control, meta).forEach { kept += it }
-            videoOut = video?.let { FileOutputStream(it.fileDescriptor) }
             metaOut = meta?.let { FileOutputStream(it.fileDescriptor) }
-            if (!config.audioOnly && !config.headless && videoOut != null) {
-                val enc = ScreenEncoder(ctx, videoOut!!, config) { w, h, codec, displayId ->
-                    if (config.appDisplay && config.component.isNotEmpty()) {
-                        runCatching {
-                            Runtime.getRuntime().exec(arrayOf("am", "start", "--display", displayId.toString(), "-n", config.component))
-                        }
-                    }
-                    meta(JSONObject().put("type", "ready").put("video", codec).put("audio", audio?.codecId ?: 0)
-                        .put("w", w).put("h", h).put("sdk", android.os.Build.VERSION.SDK_INT)
-                        .put("flex", android.os.Build.VERSION.SDK_INT >= 35))
+            if (!config.audioOnly && !config.headless && video != null) {
+                val enc = ScreenEncoder(shell, FileOutputStream(video.fileDescriptor), config) { w, h, displayId ->
+                    if (config.appDisplay && config.component.isNotEmpty()) launch(config.component, displayId)
+                    meta(JSONObject().put("type", "ready").put("w", w).put("h", h))
                 }
                 encoder = enc
                 io.execute {
                     runCatching { enc.run() }.onFailure {
+                        if (!enc.running) return@onFailure // stopped on purpose
                         Log.e(TAG, "encode", it)
                         meta(JSONObject().put("type", "error").put("reason", it.message ?: "encoder stopped"))
                     }
                 }
             } else {
-                meta(JSONObject().put("type", "ready").put("video", 0).put("audio", 0)
-                    .put("w", 0).put("h", 0).put("sdk", android.os.Build.VERSION.SDK_INT).put("flex", false))
+                meta(JSONObject().put("type", "ready").put("w", 0).put("h", 0))
             }
             if (audioFd != null && !config.headless) {
-                val capture = AudioCapture(FileOutputStream(audioFd.fileDescriptor))
+                val capture = AudioCapture(shell, FileOutputStream(audioFd.fileDescriptor))
                 audio = capture
-                io.execute { runCatching { capture.run() } }
+                io.execute { runCatching { capture.run() }.onFailure { Log.w(TAG, "audio", it) } }
             }
             if (control != null) {
+                // Input lands in display pixels. A mirror maps onto the real
+                // screen (read each time, so rotation is followed); an app
+                // display is exactly the encoded size.
+                fun screen() = HiddenApi.defaultDisplaySize(base)
                 val ctrl = Controller(
                     FileInputStream(control.fileDescriptor),
-                    width = { encoder?.width ?: HiddenApi.defaultDisplaySize(ctx).first },
-                    height = { encoder?.height ?: HiddenApi.defaultDisplaySize(ctx).second },
-                    actions = shellActions(ctx),
+                    width = { if (config.appDisplay) encoder?.width ?: 0 else screen().first },
+                    height = { if (config.appDisplay) encoder?.height ?: 0 else screen().second },
+                    actions = shellActions(),
+                    displayId = { if (config.appDisplay) encoder?.displayId ?: 0 else 0 },
                 )
                 controller = ctrl
-                io.execute { runCatching { ctrl.run() } }
+                io.execute { ctrl.run() }
             }
-            if (config.screenOff) setScreenPower(false)
-            io.execute { publishApps(ctx) }
+            if (config.screenOff) setPanel(on = false)
+            if (!config.headless && !config.audioOnly) io.execute { publishApps(base) }
             "ok"
         } catch (t: Throwable) {
             Log.e(TAG, "start", t)
@@ -105,22 +103,11 @@ class MirrorServer @JvmOverloads constructor(
         controller = null
         audio = null
         encoder = null
-        runCatching { videoOut?.close() }
+        if (panelOff) setPanel(on = true)
         runCatching { metaOut?.close() }
+        metaOut = null
         kept.forEach { runCatching { it.close() } }
         kept.clear()
-        videoOut = null
-        metaOut = null
-    }
-
-    override fun setScreenPower(on: Boolean) {
-        enforceCaller()
-        HiddenApi.setDisplayPower(on)
-    }
-
-    override fun capabilities(): String {
-        enforceCaller()
-        return HiddenApi.capabilitiesJson(context)
     }
 
     override fun bringUpHotspot(): String {
@@ -130,61 +117,25 @@ class MirrorServer @JvmOverloads constructor(
         return runCatching { HotspotStarter.start(ctx) }.getOrElse { err(it.message ?: "hotspot failed") }
     }
 
-    override fun joinWifi(ssid: String?, psk: String?): String {
-        enforceCaller()
-        val ctx = context ?: return err("no context")
-        if (ssid.isNullOrBlank()) return err("missing ssid")
-        return runCatching { addNetwork(ctx, ssid, psk.orEmpty()) }.getOrElse { err(it.message ?: "join failed") }
-    }
-
-    override fun listSavedNetworks(): String {
-        enforceCaller()
-        val ctx = context ?: return err("no context")
-        val wifi = ctx.applicationContext.getSystemService(WifiManager::class.java)
-        val list = JSONArray()
-        val method = wifi.javaClass.methods.firstOrNull { it.name == "getPrivilegedConfiguredNetworks" }
-            ?: wifi.javaClass.methods.firstOrNull { it.name == "getConfiguredNetworks" }
-        val configs = runCatching { method?.invoke(wifi) as? List<*> }.getOrNull().orEmpty()
-        for (item in configs) {
-            val cfg = item as? WifiConfiguration ?: continue
-            val name = cfg.SSID?.trim('"') ?: continue
-            list.put(JSONObject().put("ssid", name).put("psk", cfg.preSharedKey?.trim('"')))
-        }
-        return JSONObject().put("networks", list).toString()
-    }
-
     override fun unlock(pin: String?, near: Boolean): String {
         enforceCaller()
         val ctx = context ?: return err("no context")
-        if (!near) return err("far")
-        if (!HiddenApi.userUnlocked(ctx)) return err("locked since boot")
+        if (!near) return err("The Mac says the phone is not near")
+        if (!HiddenApi.userUnlocked(ctx)) return err("Unlock the phone once after it restarts")
         val digits = pin?.toCharArray() ?: return err("no pin")
         try {
-            HiddenApi.setDisplayPower(true)
-            Runtime.getRuntime().exec(arrayOf("input", "keyevent", "KEYCODE_WAKEUP")).waitFor()
-            for (ch in digits) {
-                val name = digitKey(ch) ?: return err("pin must be digits")
-                Runtime.getRuntime().exec(arrayOf("input", "keyevent", name)).waitFor()
-            }
-            Runtime.getRuntime().exec(arrayOf("input", "keyevent", "KEYCODE_ENTER")).waitFor()
+            if (digits.isEmpty() || digits.any { it !in '0'..'9' }) return err("The PIN must be digits")
+            setPanel(on = true)
+            shell("input", "keyevent", "KEYCODE_WAKEUP")
+            // Brings up the PIN pad on a secure lock screen.
+            shell("wm", "dismiss-keyguard")
+            Thread.sleep(400)
+            shell("input", "text", String(digits))
+            shell("input", "keyevent", "KEYCODE_ENTER")
             return "ok"
         } finally {
             digits.fill('\u0000')
         }
-    }
-
-    override fun runPower(action: String?): String {
-        enforceCaller()
-        val key = when (action) {
-            "wake" -> "KEYCODE_WAKEUP"
-            "sleep" -> "KEYCODE_SLEEP"
-            "lock" -> "KEYCODE_POWER"
-            else -> return err("unknown")
-        }
-        return runCatching {
-            Runtime.getRuntime().exec(arrayOf("input", "keyevent", key)).waitFor()
-            "ok"
-        }.getOrElse { err(it.message ?: "power failed") }
     }
 
     override fun destroy() {
@@ -192,54 +143,39 @@ class MirrorServer @JvmOverloads constructor(
         exitProcess(0)
     }
 
-    private fun shellActions(ctx: Context) = object : Controller.Actions {
-        override fun screenPower(on: Boolean) { HiddenApi.setDisplayPower(on) }
+    private fun setPanel(on: Boolean) {
+        if (HiddenApi.setDisplayPower(on)) panelOff = !on
+        else if (!on) meta(JSONObject().put("type", "notice").put("reason", "This phone cannot turn its screen off while mirroring"))
+    }
+
+    private fun shellActions() = object : Controller.Actions {
+        override fun screenPower(on: Boolean) = setPanel(on)
         override fun expand(settings: Boolean) {
-            val which = if (settings) "expand-settings" else "expand-notifications"
-            runCatching { Runtime.getRuntime().exec(arrayOf("cmd", "statusbar", which)) }
+            shell("cmd", "statusbar", if (settings) "expand-settings" else "expand-notifications")
         }
-        override fun launch(component: String) {
-            if (component.isBlank()) return
-            val id = encoder?.displayId
-            val cmd = if (id != null && id != 0) {
-                arrayOf("am", "start", "--display", id.toString(), "-n", component)
-            } else {
-                arrayOf("am", "start", "-n", component)
-            }
-            runCatching { Runtime.getRuntime().exec(cmd) }
-        }
-        override fun clipboard(text: String) { setClipboard(text) }
-        override fun reconfigure(width: Int, height: Int, fps: Int, bitrate: Int, limit: Int, codec: Int, flags: Int) {
-            if (width > 0 && height > 0) {
-                val dpi = HiddenApi.defaultDisplaySize(ctx).third
-                encoder?.resize(width, height, dpi)
-            }
-            if (flags and 1 != 0) HiddenApi.setDisplayPower(false)
-            if (flags and 1 == 0 && flags != 0) HiddenApi.setDisplayPower(true)
-        }
-        override fun record(on: Boolean) {
-            meta(JSONObject().put("type", "record").put("on", on))
-        }
-        override fun unlock(pin: String) {
-            val chars = pin.toCharArray()
-            try {
-                this@MirrorServer.unlock(String(chars), true)
-            } finally {
-                chars.fill('\u0000')
-            }
-        }
+        override fun launch(component: String) = launch(component, encoder?.displayId ?: 0)
+        override fun clipboard(text: String) = setClipboard(text)
+        override fun syncFrame() { encoder?.requestSyncFrame() }
+    }
+
+    private fun launch(component: String, displayId: Int) {
+        if (component.isBlank()) return
+        if (displayId != 0) shell("am", "start", "--display", displayId.toString(), "-n", component)
+        else shell("am", "start", "-n", component)
+    }
+
+    private fun shell(vararg command: String) {
+        runCatching { Runtime.getRuntime().exec(command).waitFor() }.onFailure { Log.w(TAG, command.joinToString(" "), it) }
     }
 
     private fun publishApps(ctx: Context) {
         val pm = ctx.packageManager
         val intent = android.content.Intent(android.content.Intent.ACTION_MAIN).addCategory(android.content.Intent.CATEGORY_LAUNCHER)
         val apps = JSONArray()
-        for (info in pm.queryIntentActivities(intent, 0).take(80)) {
-            val label = info.loadLabel(pm)?.toString().orEmpty()
+        for (info in pm.queryIntentActivities(intent, 0).sortedBy { it.loadLabel(pm).toString().lowercase() }.take(80)) {
             val component = info.activityInfo?.let { "${it.packageName}/${it.name}" } ?: continue
-            val icon = runCatching { png(info.loadIcon(pm)) }.getOrNull()
-            val row = JSONObject().put("label", label).put("component", component).put("package", info.activityInfo.packageName)
-            if (icon != null && apps.length() < 24) row.put("icon", icon)
+            val row = JSONObject().put("label", info.loadLabel(pm).toString()).put("component", component)
+            if (apps.length() < 24) runCatching { png(info.loadIcon(pm)) }.getOrNull()?.let { row.put("icon", it) }
             apps.put(row)
         }
         meta(JSONObject().put("type", "apps").put("apps", apps))
@@ -247,9 +183,8 @@ class MirrorServer @JvmOverloads constructor(
 
     private fun png(drawable: Drawable): String {
         val bitmap = Bitmap.createBitmap(48, 48, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bitmap)
         drawable.setBounds(0, 0, 48, 48)
-        drawable.draw(canvas)
+        drawable.draw(Canvas(bitmap))
         val stream = java.io.ByteArrayOutputStream()
         bitmap.compress(Bitmap.CompressFormat.PNG, 80, stream)
         bitmap.recycle()
@@ -258,57 +193,38 @@ class MirrorServer @JvmOverloads constructor(
 
     private fun setClipboard(text: String) {
         runCatching {
-            val sm = Class.forName("android.os.ServiceManager")
-            val binder = sm.getDeclaredMethod("getService", String::class.java).invoke(null, Context.CLIPBOARD_SERVICE) as android.os.IBinder
-            val stub = Class.forName("android.content.IClipboard\$Stub")
-            val clipboard = stub.getDeclaredMethod("asInterface", android.os.IBinder::class.java).invoke(null, binder)
+            val binder = Class.forName("android.os.ServiceManager").getDeclaredMethod("getService", String::class.java)
+                .invoke(null, Context.CLIPBOARD_SERVICE) as android.os.IBinder
+            val clipboard = Class.forName("android.content.IClipboard\$Stub")
+                .getDeclaredMethod("asInterface", android.os.IBinder::class.java).invoke(null, binder)
             val clip = ClipData.newPlainText("wigly", text)
             val set = clipboard.javaClass.methods.first { it.name == "setPrimaryClip" }
-            set.isAccessible = true
+            // The signature grew over releases: (clip, pkg[, attributionTag], userId[, deviceId]).
             when (set.parameterCount) {
-                3 -> set.invoke(clipboard, clip, "com.android.shell", 0)
-                4 -> set.invoke(clipboard, clip, "com.android.shell", null, 0)
-                else -> set.invoke(clipboard, clip, "com.android.shell")
+                2 -> set.invoke(clipboard, clip, HiddenApi.SHELL_PACKAGE)
+                3 -> set.invoke(clipboard, clip, HiddenApi.SHELL_PACKAGE, 0)
+                4 -> set.invoke(clipboard, clip, HiddenApi.SHELL_PACKAGE, null, 0)
+                else -> set.invoke(clipboard, clip, HiddenApi.SHELL_PACKAGE, null, 0, 0)
             }
-        }
-    }
-
-    @Suppress("DEPRECATION")
-    private fun addNetwork(ctx: Context, ssid: String, psk: String): String {
-        val wifi = ctx.applicationContext.getSystemService(WifiManager::class.java)
-        val cfg = WifiConfiguration().apply {
-            SSID = "\"$ssid\""
-            if (psk.isEmpty()) allowedKeyManagement.set(WifiConfiguration.KeyMgmt.NONE)
-            else preSharedKey = "\"$psk\""
-        }
-        val id = wifi.addNetwork(cfg)
-        if (id < 0) return err("addNetwork refused")
-        wifi.enableNetwork(id, true)
-        return JSONObject().put("ok", true).put("ssid", ssid).toString()
+        }.onFailure { Log.w(TAG, "clipboard", it) }
     }
 
     private fun meta(json: JSONObject) {
         val out = metaOut ?: return
-        runCatching { out.write(json.toString().toByteArray()) }
+        runCatching { Records.write(out, json.toString().toByteArray()) }
     }
 
     private fun enforceCaller() {
         val calling = Binder.getCallingUid()
-        val ctx = context ?: return
-        val appUid = runCatching { ctx.packageManager.getApplicationInfo("com.wiglywoo", 0).uid }.getOrNull()
-        if (calling != appUid && calling != Process.SHELL_UID && calling != Process.SYSTEM_UID && calling != Process.myUid()) {
-            throw SecurityException("caller $calling")
-        }
-    }
-
-    private fun digitKey(ch: Char): String? = when (ch) {
-        in '0'..'9' -> "KEYCODE_$ch"
-        else -> null
+        if (calling == Process.myUid() || calling == Process.SYSTEM_UID || calling == HiddenApi.SHELL_UID) return
+        val appUid = runCatching { context?.packageManager?.getApplicationInfo(APP_PACKAGE, 0)?.uid }.getOrNull()
+        if (calling != appUid) throw SecurityException("caller $calling")
     }
 
     private fun err(message: String) = JSONObject().put("error", message).toString()
 
     companion object {
         private const val TAG = "WiglyMirror"
+        private const val APP_PACKAGE = "com.wiglywoo"
     }
 }

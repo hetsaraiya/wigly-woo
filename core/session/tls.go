@@ -31,5 +31,8 @@ func noteTCP(c net.Conn) {
 	}
 	if tcp != nil {
 		_ = tcp.SetNoDelay(true)
+		// A small send buffer makes a slow link back up into the mux, which
+		// drops stale video, instead of into the kernel, which only queues it.
+		_ = tcp.SetWriteBuffer(256 << 10)
 	}
 }

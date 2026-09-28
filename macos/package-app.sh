@@ -17,8 +17,10 @@ if [[ ! "$BUILD_NUMBER" =~ ^[0-9]+$ ]]; then
 fi
 
 ./build-core.sh
-swift build -c release
-BIN_DIR="$(swift build -c release --show-bin-path)"
+# SWIFT_BUILD_FLAGS lets a Command Line Tools setup borrow Xcode's SwiftUI
+# macro plugin: -Xswiftc -plugin-path -Xswiftc <Xcode>/.../host/plugins
+swift build -c release ${SWIFT_BUILD_FLAGS:-}
+BIN_DIR="$(swift build -c release ${SWIFT_BUILD_FLAGS:-} --show-bin-path)"
 APP="$ROOT/dist/WiglyWoo.app"
 
 rm -rf "$APP"

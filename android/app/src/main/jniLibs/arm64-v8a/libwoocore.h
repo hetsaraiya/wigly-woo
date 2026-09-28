@@ -105,6 +105,9 @@ extern int woo_send_fd(char* peerID, int fd, char* name, long long size);
 extern void woo_cancel(void);
 extern void woo_trust(char* fingerprint, int ok);
 extern void woo_free(char* p);
+extern void woo_session_allow(char* fingerprint);
+extern int woo_session_dial(char* addr, char* fingerprint);
+extern void woo_session_close(char* id);
 
 #ifdef __cplusplus
 }

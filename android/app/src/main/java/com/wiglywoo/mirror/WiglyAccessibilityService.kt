@@ -4,9 +4,8 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.graphics.Path
 import android.view.accessibility.AccessibilityEvent
-import android.view.accessibility.AccessibilityNodeInfo
 
-/** Basic-mirroring input, and an opt-in read of Chrome's URL bar for handoff. */
+/** Basic-mirroring input: taps and swipes when Shizuku is not running. */
 class WiglyAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() { instance = this }
     override fun onDestroy() {
@@ -15,30 +14,12 @@ class WiglyAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
     override fun onInterrupt() {}
 
-    fun tap(x: Float, y: Float) {
-        val path = Path().apply { moveTo(x, y) }
-        dispatchGesture(GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path, 0, 40)).build(), null, null)
-    }
-
-    fun swipe(x1: Float, y1: Float, x2: Float, y2: Float) {
-        val path = Path().apply { moveTo(x1, y1); lineTo(x2, y2) }
-        dispatchGesture(GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path, 0, 120)).build(), null, null)
-    }
-
-    /** Opt-in: the URL currently shown in Chrome's address bar, if the tree exposes it. */
-    fun chromeUrl(): String? {
-        val root = rootInActiveWindow ?: return null
-        return findUrl(root)
-    }
-
-    private fun findUrl(node: AccessibilityNodeInfo): String? {
-        val text = node.text?.toString().orEmpty()
-        if (text.startsWith("http://") || text.startsWith("https://")) return text
-        for (i in 0 until node.childCount) {
-            val child = node.getChild(i) ?: continue
-            findUrl(child)?.let { return it }
-        }
-        return null
+    /** A tap when the points are close, otherwise a swipe that takes [ms]. */
+    fun stroke(x1: Float, y1: Float, x2: Float, y2: Float, ms: Long) {
+        val moved = Math.hypot((x2 - x1).toDouble(), (y2 - y1).toDouble()) > 24
+        val path = Path().apply { moveTo(x1, y1); if (moved) lineTo(x2, y2) }
+        val duration = if (moved) ms.coerceIn(60, 1_000) else 40
+        dispatchGesture(GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path, 0, duration)).build(), null, null)
     }
 
     companion object {

@@ -7,7 +7,7 @@
 //	channel u8 | flags u8 | length u32be | payload
 //
 // Channel numbers are stable. Shells never see this header: the FFI hands
-// them one datagram socket per channel, and one datagram is one payload.
+// them one stream socket per channel carrying length-prefixed records.
 package session
 
 import (

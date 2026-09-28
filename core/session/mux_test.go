@@ -55,6 +55,36 @@ func TestMuxDropsVideoUntilKeyframe(t *testing.T) {
 	}
 }
 
+func TestMuxKeepsCodecConfigWhenDropping(t *testing.T) {
+	m := NewMux()
+	m.Enqueue(Frame{Channel: ChanVideo, Flags: FlagKeyframe, Payload: []byte("config")})
+	for i := 0; i < videoQueueCap+2; i++ {
+		m.Enqueue(Frame{Channel: ChanVideo, Flags: FlagDroppable, Payload: []byte{byte(i)}})
+	}
+	if !m.Dropping() {
+		t.Fatal("expected to be dropping")
+	}
+	m.Enqueue(Frame{Channel: ChanVideo, Flags: FlagDroppable | FlagKeyframe, Payload: []byte("key")})
+	for _, want := range []string{"config", "key"} {
+		f, ok := m.Next()
+		if !ok || string(f.Payload) != want {
+			t.Fatalf("want %q, got %q ok=%v", want, f.Payload, ok)
+		}
+	}
+}
+
+func TestMuxKeepsAudioConfig(t *testing.T) {
+	m := NewMux()
+	m.Enqueue(Frame{Channel: ChanAudio, Payload: []byte("config")})
+	for i := 0; i < audioQueueCap+3; i++ {
+		m.Enqueue(Frame{Channel: ChanAudio, Flags: FlagDroppable, Payload: []byte{byte(i)}})
+	}
+	f, _ := m.Next()
+	if string(f.Payload) != "config" {
+		t.Fatalf("config dropped, got %q", f.Payload)
+	}
+}
+
 func TestMuxDropsOldestAudio(t *testing.T) {
 	m := NewMux()
 	for i := 0; i < audioQueueCap+3; i++ {
@@ -78,4 +108,22 @@ func TestMuxCloseUnblocks(t *testing.T) {
 	}()
 	m.Close()
 	<-done
+}
+
+func TestMuxReportsEveryDropUntilKeyframe(t *testing.T) {
+	m := NewMux()
+	drops := 0
+	m.OnDrop = func() { drops++ }
+	for i := 0; i < videoQueueCap+5; i++ {
+		m.Enqueue(Frame{Channel: ChanVideo, Flags: FlagDroppable, Payload: []byte{byte(i)}})
+	}
+	// The overflowing frame and the four after it were all dropped.
+	if drops != 5 {
+		t.Fatalf("drops = %d, want 5", drops)
+	}
+	m.Enqueue(Frame{Channel: ChanVideo, Flags: FlagDroppable | FlagKeyframe, Payload: []byte("key")})
+	m.Enqueue(Frame{Channel: ChanVideo, Flags: FlagDroppable, Payload: []byte("p")})
+	if drops != 5 || m.Dropping() {
+		t.Fatalf("still dropping after a keyframe (drops=%d)", drops)
+	}
 }

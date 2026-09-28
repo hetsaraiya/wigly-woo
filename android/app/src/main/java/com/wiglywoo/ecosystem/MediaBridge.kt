@@ -12,12 +12,16 @@ import org.json.JSONObject
 /** Active media sessions, allowed because the notification listener is enabled. */
 class MediaBridge(private val context: Context) {
     private var controller: MediaController? = null
+    private var listening = false
     private val sessions by lazy { context.getSystemService(MediaSessionManager::class.java) }
 
+    /** Retried on each refresh: it only works once notification access is granted. */
     fun start() {
+        if (listening) return
         val component = ComponentName(context, NotificationRelayService::class.java)
         runCatching {
             sessions.addOnActiveSessionsChangedListener({ list -> bind(list?.firstOrNull()) }, component)
+            listening = true
             bind(sessions.getActiveSessions(component).firstOrNull())
         }
     }
@@ -45,7 +49,7 @@ class MediaBridge(private val context: Context) {
     }
 
     private fun publish(controller: MediaController?) {
-        if (!EcosystemSettings.load(context).nowPlaying || controller == null) return
+        if (!EcosystemSettings.enabled(context, EcosystemSettings.Feature.NOW_PLAYING) || controller == null) return
         val md = controller.metadata
         val playing = controller.playbackState?.state == PlaybackState.STATE_PLAYING
         CompanionManager.send(JSONObject()

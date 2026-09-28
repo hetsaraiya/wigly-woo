@@ -12,6 +12,8 @@ enum EcosystemRouter {
             NowPlayingBridge.shared.apply(message)
         case "otp":
             if let code = message["code"] as? String { showCode(code, source: message["source"] as? String ?? "Phone") }
+        case "phone_recent":
+            MirrorController.shared.setRecent(message["files"] as? [[String: Any]] ?? [])
         case "call":
             CallBanner.shared.show(message)
         case "sms":
@@ -22,18 +24,21 @@ enum EcosystemRouter {
             }
         case "hotspot_offer":
             let ssid = message["ssid"] as? String ?? ""
-            let psk = message["psk"] as? String ?? ""
-            if let error = WifiJoiner.join(ssid: ssid, psk: psk) {
-                Toaster.shared.show(error)
-            } else {
-                Toaster.shared.show("Joined \(ssid)")
+            Toaster.shared.show("Joining \(ssid)…")
+            WifiJoiner.join(ssid: ssid, psk: message["psk"] as? String ?? "") { error in
+                Toaster.shared.show(error ?? "Joined \(ssid)")
             }
         case "hotspot_error":
-            Toaster.shared.show("The phone could not start its hotspot. Turn it on in settings.")
-        case "wifi_offer":
-            Toaster.shared.show("The phone shared its saved networks")
-        case "ring_mac":
-            NSSound.beep()
+            let reason = message["reason"] as? String ?? ""
+            Toaster.shared.show(reason == "shizuku"
+                ? "Restart Shizuku on the phone to turn its hotspot on from here"
+                : "The phone could not start its hotspot. Turn it on in the phone's settings.")
+        case "unlock_result":
+            if message["ok"] as? Bool != true {
+                let reason = message["reason"] as? String ?? ""
+                Toaster.shared.show(reason == "shizuku" ? "Restart Shizuku on the phone to unlock it from here"
+                                    : reason.isEmpty ? "The phone did not unlock" : reason)
+            }
         default:
             break
         }
@@ -67,7 +72,7 @@ final class MessagesStore: ObservableObject {
         items = Array(items.prefix(100))
     }
 
-    func send(address: String, body: String) {
+    func reply(to address: String, body: String) {
         CompanionBridge.shared.send(["type": "sms_send", "address": address, "body": body])
     }
 }
@@ -79,7 +84,7 @@ final class CallBanner {
     func show(_ message: [String: Any]) {
         let state = message["state"] as? String ?? "idle"
         if state == "idle" { panel?.close(); panel = nil; return }
-        let number = message["number"] as? String ?? "Unknown"
+        let number = (message["number"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? CompanionConfig.shared.phoneName
         DispatchQueue.main.async {
             let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 320, height: 120),
                                 styleMask: [.titled, .nonactivatingPanel], backing: .buffered, defer: false)

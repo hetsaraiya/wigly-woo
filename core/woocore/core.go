@@ -23,7 +23,6 @@ type Config struct {
 	Name    string // shown to peers
 	SaveDir string // where received files land
 	Port    int    // transfer TCP port (0 = pick free)
-	Caps    uint32 // discovery.Cap* bits advertised on the beacon
 }
 
 // Event is anything pushed up to the UI. Concrete types below.
@@ -78,13 +77,6 @@ type SessionClosed struct{ ID string }
 // problem is not reported as a failed file transfer.
 type SessionError struct{ Message string }
 
-// HotspotReady is emitted when this device has brought a hotspot up. The
-// passphrase stays in-process; the shell forwards it over the encrypted relay.
-type HotspotReady struct {
-	SSID string
-	PSK  string
-}
-
 // Core is the engine.
 type Core struct {
 	cfg      Config
@@ -105,7 +97,6 @@ type Core struct {
 	cancelers  map[int]func() // id -> abort func for in-progress transfers
 	nextCancel int
 
-	caps        uint32
 	sessionPort int
 	allowed     map[string]struct{}
 	live        map[string]*session.Conn
@@ -124,7 +115,7 @@ func New(cfg Config) (*Core, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	c := &Core{
+	return &Core{
 		cfg:       cfg,
 		identity:  id,
 		manager:   link.NewManager(link.NoLevers{}),
@@ -133,14 +124,9 @@ func New(cfg Config) (*Core, error) {
 		cancel:    cancel,
 		pending:   make(map[string]chan bool),
 		cancelers: make(map[int]func()),
-		caps:      cfg.Caps,
 		allowed:   make(map[string]struct{}),
 		live:      make(map[string]*session.Conn),
-	}
-	c.manager.SetHotspotReady(func(ssid, psk string) {
-		c.emit(HotspotReady{SSID: ssid, PSK: psk})
-	})
-	return c, nil
+	}, nil
 }
 
 // Identity exposes this device's name + fingerprint for display at pairing.
@@ -193,8 +179,14 @@ func (c *Core) Start() error {
 		}
 	}()
 
+	beacon := discovery.Beacon{
+		ID:          c.identity.Fingerprint, // fingerprint doubles as stable ID
+		Name:        c.cfg.Name,
+		Port:        c.cfg.Port,
+		Fingerprint: c.identity.Fingerprint,
+	}
 	go func() {
-		if err := discovery.Announce(c.ctx, c.snapshotBeacon); err != nil && c.ctx.Err() == nil {
+		if err := discovery.Announce(c.ctx, beacon); err != nil && c.ctx.Err() == nil {
 			c.emit(Errorf{Message: "announce: " + err.Error()})
 		}
 	}()

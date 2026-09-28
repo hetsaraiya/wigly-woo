@@ -13,9 +13,7 @@ import "encoding/binary"
 // Key body: action u8, androidKeyCode u32be, metaState u32be.
 // Text, clipboard, and launch bodies are raw UTF-8.
 // Button body: id u8.
-// Config body: width u16be, height u16be, fps u8, bitrate u32be, limit u16be,
-// codec u8, flags u8.
-// Display-power and record bodies: one u8.
+// Display-power body: one u8.
 // Pointer body: action u8, buttons u8, x u16be, y u16be, dx i16be, dy i16be.
 const (
 	CtrlTouch        byte = 1
@@ -24,11 +22,12 @@ const (
 	CtrlText         byte = 4
 	CtrlButton       byte = 5
 	CtrlClipboard    byte = 6
-	CtrlConfig       byte = 7
 	CtrlDisplayPower byte = 8
 	CtrlLaunch       byte = 9
-	CtrlRecord       byte = 10
 	CtrlPointer      byte = 11
+	// CtrlSyncFrame is written by the core to the phone's own control socket
+	// when its mux starts dropping video: encode a keyframe now.
+	CtrlSyncFrame byte = 12
 
 	TouchDown byte = 0
 	TouchMove byte = 1
@@ -42,21 +41,6 @@ const (
 	BtnPower         byte = 6
 	BtnWake          byte = 7
 	BtnSleep         byte = 8
-	BtnRotate        byte = 9
-
-	CodecHEVC byte = 1
-	CodecH264 byte = 2
-	CodecOpus byte = 3
-	CodecAAC  byte = 4
-
-	// ConfigFlagScreenOff asks the phone to keep the panel dark.
-	ConfigFlagScreenOff byte = 1 << 0
-	// ConfigFlagAudioOnly is the "phone audio through Mac speakers" mode.
-	ConfigFlagAudioOnly byte = 1 << 1
-	// ConfigFlagHeadless is universal control: input without a video window.
-	ConfigFlagHeadless byte = 1 << 2
-	// ConfigFlagAppDisplay asks for a fixed virtual display running one app.
-	ConfigFlagAppDisplay byte = 1 << 3
 
 	PointerMove  byte = 0
 	PointerDown  byte = 1
@@ -89,19 +73,3 @@ func Key(action byte, keyCode, meta uint32) []byte {
 
 // Button encodes a navigation or power command.
 func Button(id byte) []byte { return []byte{CtrlButton, id} }
-
-// Config encodes the stream the Mac wants.
-func Config(width, height uint16, fps byte, bitrate uint32, limit uint16, codec, flags byte) []byte {
-	b := make([]byte, 13)
-	b[0] = CtrlConfig
-	binary.BigEndian.PutUint16(b[1:3], width)
-	binary.BigEndian.PutUint16(b[3:5], height)
-	b[5] = fps
-	binary.BigEndian.PutUint32(b[6:10], bitrate)
-	binary.BigEndian.PutUint16(b[10:12], limit)
-	b[12] = codec
-	// flags live in an extra byte; older readers that stop at 13 still work
-	// because they ignore a trailing byte only if we keep it inside the
-	// datagram. Include it.
-	return append(b, flags)
-}

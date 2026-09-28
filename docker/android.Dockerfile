@@ -6,6 +6,17 @@
 # this runs under emulation. Every network step has retries and lives in its own
 # cache layer, so a truncated download on a flaky connection only costs that one
 # step on re-run — completed layers are reused.
+#
+# Go is unpacked in a native stage: under Rosetta on macOS 27, GNU tar's
+# directory-relative syscalls (mkdirat/openat on a dir fd) fail with ENOSYS,
+# so extracting a tarball inside the amd64 image breaks. COPY is not emulated.
+ARG GO_VERSION=1.26.3
+FROM --platform=$BUILDPLATFORM alpine:3.20 AS go
+ARG GO_VERSION
+RUN apk add --no-cache curl tar \
+    && curl -fsSL --retry 8 --retry-delay 5 --retry-all-errors \
+        https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz | tar -C /usr/local -xz
+
 FROM eclipse-temurin:17-jdk
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -20,9 +31,7 @@ RUN printf 'Acquire::Retries "8";\nAcquire::http::Timeout "30";\n' > /etc/apt/ap
 ENV CURL="curl -fsSL --retry 8 --retry-delay 5 --retry-all-errors"
 
 # --- Go (must satisfy core/go.mod: go 1.26) ---------------------------------
-ENV GO_VERSION=1.26.3
-RUN $CURL https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz -o /tmp/go.tgz \
-    && tar -C /usr/local -xzf /tmp/go.tgz && rm /tmp/go.tgz
+COPY --from=go /usr/local/go /usr/local/go
 ENV PATH=/usr/local/go/bin:${PATH}
 
 # --- Gradle (AGP 8.5 needs Gradle >= 8.7) -----------------------------------

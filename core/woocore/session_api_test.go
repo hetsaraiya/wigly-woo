@@ -46,6 +46,38 @@ func TestSessionDialBetweenCores(t *testing.T) {
 	}
 }
 
+func TestSessionDialWaitsForLateAllow(t *testing.T) {
+	mac, err := New(Config{Name: "mac", SaveDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	phone, err := New(Config{Name: "phone", SaveDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mac.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := phone.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer mac.Stop()
+	defer phone.Stop()
+
+	macEvents := drain(mac)
+	phoneEvents := drain(phone)
+	// The relay message that allows the phone lands after the dial starts.
+	phone.DialSession(FormatSessionAddr("127.0.0.1", mac.SessionPort()), mac.Identity().Fingerprint)
+	time.Sleep(700 * time.Millisecond)
+	mac.AllowFingerprint(phone.Identity().Fingerprint)
+
+	open := waitSession(t, phoneEvents)
+	waitSession(t, macEvents)
+	for _, fd := range []int{open.VideoFD, open.AudioFD, open.ControlFD, open.MetaFD} {
+		syscall.Close(fd)
+	}
+}
+
 func drain(c *Core) <-chan Event {
 	out := make(chan Event, 32)
 	go func() {

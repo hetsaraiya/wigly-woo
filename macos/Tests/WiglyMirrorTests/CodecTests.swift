@@ -7,22 +7,54 @@ final class CodecTests: XCTestCase {
         XCTAssertEqual(Array(data), [1, 1, 2, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06])
     }
 
-    func testConfigIsFourteenBytes() {
-        let data = ControlCodec.config(width: 1080, height: 2400, fps: 60, bitrate: 8_000_000, limit: 1080, codec: 1, flags: 1)
-        XCTAssertEqual(data.count, 14)
-        XCTAssertEqual(data[0], 7)
-        XCTAssertEqual(data[5], 60)
-        XCTAssertEqual(data[12], 1)
-        XCTAssertEqual(data[13], 1)
-    }
-
     func testRightClickIsBack() {
         let mapper = InputMapper(size: CGSize(width: 200, height: 400))
         let event = NSEvent.mouseEvent(
             with: .rightMouseDown, location: CGPoint(x: 10, y: 10),
             modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
             eventNumber: 0, clickCount: 1, pressure: 1)!
-        XCTAssertEqual(mapper.mouse(event: event), ControlCodec.button(ControlCodec.back))
+        XCTAssertEqual(mapper.mouse(event, at: CGPoint(x: 10, y: 10)), ControlCodec.button(ControlCodec.back))
+    }
+
+    func testClickMapsFromViewPoint() {
+        let mapper = InputMapper(size: CGSize(width: 200, height: 400))
+        let event = NSEvent.mouseEvent(
+            with: .leftMouseDown, location: .zero,
+            modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+            eventNumber: 0, clickCount: 1, pressure: 1)!
+        // Top-left of the view is the phone's origin.
+        XCTAssertEqual(mapper.mouse(event, at: CGPoint(x: 0, y: 400)), ControlCodec.touch(action: 0, pointer: 0, x: 0, y: 0))
+    }
+
+    func testPunctuationIsTypedAsText() {
+        let event = NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+            characters: ".", charactersIgnoringModifiers: ".", isARepeat: false, keyCode: 47)!
+        XCTAssertEqual(InputMapper.key(event), [ControlCodec.text(".")])
+    }
+
+    func testReturnIsAKeyCode() {
+        let event = NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+            characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36)!
+        XCTAssertEqual(InputMapper.key(event), [ControlCodec.key(action: 0, code: 66, meta: 0)])
+    }
+
+    func testCommandVPastesTheMacClipboard() {
+        let event = NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [.command], timestamp: 0, windowNumber: 0, context: nil,
+            characters: "v", charactersIgnoringModifiers: "v", isARepeat: false, keyCode: 9)!
+        let out = InputMapper.key(event, pasteboard: { "hi" })
+        XCTAssertEqual(out.first, ControlCodec.clipboard("hi"))
+        XCTAssertEqual(out.count, 3)
+    }
+
+    func testMediaPayloadStartsAtZero() {
+        let packet = Data([1, 1, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 1, 0x26])
+        let media = Datagram.media(packet)!
+        XCTAssertEqual(media.pts, 5)
+        XCTAssertEqual(media.payload.startIndex, 0)
+        XCTAssertEqual(AnnexB.split(media.payload).count, 1)
     }
 
     func testAnnexBStartCodes() {

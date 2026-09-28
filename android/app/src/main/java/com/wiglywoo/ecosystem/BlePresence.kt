@@ -1,23 +1,41 @@
 package com.wiglywoo.ecosystem
 
-import android.bluetooth.BluetoothAdapter
+import android.annotation.SuppressLint
 import android.bluetooth.BluetoothManager
+import android.bluetooth.le.AdvertiseCallback
 import android.bluetooth.le.AdvertiseData
 import android.bluetooth.le.AdvertiseSettings
+import android.bluetooth.le.BluetoothLeAdvertiser
 import android.content.Context
-import android.os.ParcelUuid
+import android.os.Handler
+import android.os.Looper
 import com.wiglywoo.CompanionConfig
-import java.util.UUID
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
 /**
- * Advertises a token that rotates every minute. The Mac decides near/far from
- * RSSI. There is no UWB on this pair, so distance stays coarse.
+ * Advertises an 8-byte token derived from the pairing secret, re-derived
+ * every minute. The Mac decides near/far from RSSI; there is no UWB on this
+ * pair, so distance stays coarse. The token rides in manufacturer data
+ * (company 0xFFFF, reserved for testing): a 128-bit service UUID plus data
+ * does not fit the 31-byte legacy advertisement.
  */
 object BlePresence {
-    val service: UUID = UUID.fromString("8f3c1c0e-6a3a-4b1e-9e2a-7c5d9a1b0001")
+    const val COMPANY_ID = 0xFFFF
+
+    /** Set by the Mac's presence reports. Unknown counts as near. */
     @Volatile var near: Boolean = true
+
+    private val main = Handler(Looper.getMainLooper())
+    private var advertiser: BluetoothLeAdvertiser? = null
+    private var context: Context? = null
+    private val callback = object : AdvertiseCallback() {}
+    private val rotate = object : Runnable {
+        override fun run() {
+            advertise()
+            main.postDelayed(this, 60_000 - System.currentTimeMillis() % 60_000)
+        }
+    }
 
     fun token(secret: String, minute: Long = System.currentTimeMillis() / 60_000): ByteArray {
         val mac = Mac.getInstance("HmacSHA256")
@@ -25,23 +43,34 @@ object BlePresence {
         return mac.doFinal("wigly-ble-v1|$minute".toByteArray()).copyOf(8)
     }
 
-    fun start(context: Context) {
-        val config = CompanionConfig.load(context)
-        if (!config.isComplete) return
-        val adapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter ?: return
-        val advertiser = adapter.bluetoothLeAdvertiser ?: return
+    fun update(context: Context, on: Boolean) {
+        main.removeCallbacks(rotate)
+        stopAdvertising()
+        this.context = context.applicationContext
+        if (on && CompanionConfig.load(context).isComplete) main.post(rotate)
+    }
+
+    @SuppressLint("MissingPermission") // update(true) is only called with BLUETOOTH_ADVERTISE granted
+    private fun advertise() {
+        val ctx = context ?: return
+        stopAdvertising()
+        val adapter = ctx.getSystemService(BluetoothManager::class.java)?.adapter ?: return
+        val le = adapter.bluetoothLeAdvertiser ?: return
         val settings = AdvertiseSettings.Builder()
             .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_POWER)
-            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_LOW)
+            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM)
             .setConnectable(false)
             .build()
         val data = AdvertiseData.Builder()
-            .addServiceUuid(ParcelUuid(service))
-            .addServiceData(ParcelUuid(service), token(config.pairingSecret))
+            .addManufacturerData(COMPANY_ID, token(CompanionConfig.load(ctx).pairingSecret))
             .setIncludeDeviceName(false)
             .build()
-        runCatching { advertiser.startAdvertising(settings, data, object : android.bluetooth.le.AdvertiseCallback() {}) }
+        if (runCatching { le.startAdvertising(settings, data, callback) }.isSuccess) advertiser = le
     }
 
-    fun isFar(): Boolean = !near
+    @SuppressLint("MissingPermission")
+    private fun stopAdvertising() {
+        advertiser?.let { runCatching { it.stopAdvertising(callback) } }
+        advertiser = null
+    }
 }

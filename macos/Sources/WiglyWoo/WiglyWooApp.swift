@@ -12,8 +12,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         CoreBridge.shared.start(name: Host.current().localizedName ?? "Mac", saveDir: dir)
         CompanionBridge.shared.start()
         HotKey.shared.install()
-        BlePresence.shared.start()
-        EdgeController.shared.start()
+        // Both are opt-in from the Phone screen; nothing prompts at launch.
+        if BlePresence.enabled { BlePresence.shared.apply() }
+        if EdgeController.enabled { EdgeController.shared.apply() }
     }
 }
 

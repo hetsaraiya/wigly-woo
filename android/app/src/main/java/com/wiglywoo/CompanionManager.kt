@@ -47,8 +47,10 @@ object CompanionManager {
             app = context.applicationContext
             deviceId = CompanionConfig.deviceId(app)
             ShizukuClipboardBridge.initialize(app)
+            // The core must run whenever the companion does: the Mac's
+            // mirror request dials from it, and hello carries its fingerprint.
+            WooState.ensureCore(app)
             MirrorHost.install(app)
-            EcosystemHost.remember(app)
             EcosystemHost.install(app)
         }
         applyConfig(CompanionConfig.load(app))
@@ -159,9 +161,8 @@ object CompanionManager {
                 config = config.copy(peerName = name)
                 CompanionConfig.save(app, config)
             }
+            macFingerprint = message.optString("fingerprint")
             if (!message.optBoolean("reply")) sendHello(reply = true)
-            val fp = message.optString("fingerprint")
-            if (fp.isNotEmpty()) CoreBridge.allowFingerprint(fp)
         } else if (message.optString("type") == "clipboard_ack") {
             if (message.optString("clipboardID") == pendingClipboardId) {
                 pendingClipboardId = null
@@ -195,18 +196,16 @@ object CompanionManager {
     }
 
     private fun sendHello(reply: Boolean) {
-        val identity = runCatching { identityFingerprint() }.getOrDefault("")
         send(JSONObject().put("type", "hello").put("name", CompanionConfig.deviceName(app))
-            .put("kind", "android").put("reply", reply).put("fingerprint", identity))
-    }
-
-    private fun identityFingerprint(): String {
-        if (CoreBridge.loadError != null) return ""
-        return CoreBridge.identity().optString("fingerprint")
+            .put("kind", "android").put("reply", reply).put("fingerprint", WooState.fingerprint()))
     }
 
     /** The Mac name as last announced, for UI copy. */
     val peerName: String get() = config.peerName
+
+    /** The paired Mac's current core fingerprint, from its last hello. */
+    @Volatile var macFingerprint: String = ""
+        private set
 
     private fun ensureClipboardListener() {
         if (clipboardRegistered) return

@@ -2,9 +2,10 @@ package session
 
 import "sync"
 
-// videoQueueCap is how many droppable video frames may wait. Past that the
-// mux discards until the next keyframe instead of growing latency.
-const videoQueueCap = 3
+// videoQueueCap is how many droppable video frames may wait (about 100 ms
+// at 60 fps). Past that the mux discards until the next keyframe instead of
+// growing latency. Smaller caps turned ordinary Wi-Fi hiccups into drops.
+const videoQueueCap = 6
 
 // audioQueueCap bounds the jitter the writer will introduce. Older packets
 // are dropped so a stall cannot pile up more than a few dozen milliseconds
@@ -22,6 +23,12 @@ type Mux struct {
 	video     []Frame
 	dropVideo bool
 	closed    bool
+
+	// OnDrop runs (outside the lock) for every discarded video frame, so the
+	// sender keeps asking its encoder for a keyframe until one arrives. The
+	// encoder only emits frames when the screen changes, so its own keyframe
+	// interval can be minutes away. Callers throttle.
+	OnDrop func()
 }
 
 // NewMux returns an empty mux.
@@ -34,7 +41,16 @@ func NewMux() *Mux {
 // Enqueue adds a frame. A closed mux drops it.
 func (m *Mux) Enqueue(f Frame) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.enqueueLocked(f)
+	dropping := m.dropVideo
+	onDrop := m.OnDrop
+	m.mu.Unlock()
+	if dropping && onDrop != nil {
+		onDrop()
+	}
+}
+
+func (m *Mux) enqueueLocked(f Frame) {
 	if m.closed {
 		return
 	}
@@ -43,7 +59,7 @@ func (m *Mux) Enqueue(f Frame) {
 		m.urgent = append(m.urgent, f)
 	case ChanAudio:
 		if len(m.audio) >= audioQueueCap {
-			m.audio = m.audio[1:]
+			m.audio = dropOldest(m.audio)
 		}
 		m.audio = append(m.audio, f)
 	case ChanVideo:
@@ -63,15 +79,38 @@ func (m *Mux) enqueueVideoLocked(f Frame) {
 		if !key {
 			return
 		}
-		m.video = nil
+		m.video = pinned(m.video)
 		m.dropVideo = false
 	}
 	if droppable && !key && len(m.video) >= videoQueueCap {
-		m.video = nil
+		m.video = pinned(m.video)
 		m.dropVideo = true
 		return
 	}
 	m.video = append(m.video, f)
+}
+
+// pinned keeps only frames that must not be dropped, such as codec config:
+// without it the decoder can never start again.
+func pinned(q []Frame) []Frame {
+	var keep []Frame
+	for _, f := range q {
+		if f.Flags&FlagDroppable == 0 {
+			keep = append(keep, f)
+		}
+	}
+	return keep
+}
+
+// dropOldest removes the oldest droppable frame, or the oldest frame when
+// every queued frame is pinned.
+func dropOldest(q []Frame) []Frame {
+	for i, f := range q {
+		if f.Flags&FlagDroppable != 0 {
+			return append(q[:i:i], q[i+1:]...)
+		}
+	}
+	return q[1:]
 }
 
 // Next returns the next frame to write. ok is false when the mux is closed
