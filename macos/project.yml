@@ -1,0 +1,34 @@
+name: WiglyWoo
+options:
+  bundleIdPrefix: com.wiglywoo
+  deploymentTarget:
+    macOS: "13.0"
+settings:
+  MARKETING_VERSION: "0.2.0"
+  CURRENT_PROJECT_VERSION: "2"
+targets:
+  WiglyWoo:
+    type: application
+    platform: macOS
+    sources:
+      - Sources/WiglyWoo
+      - Sources/WiglyMirror
+    dependencies:
+      - sdk: CoreWLAN.framework
+      - sdk: CoreBluetooth.framework
+      - sdk: VideoToolbox.framework
+      - sdk: CoreMediaIO.framework
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.wiglywoo.macos
+      GENERATE_INFOPLIST_FILE: NO
+      INFOPLIST_FILE: Info.plist
+      CODE_SIGN_ENTITLEMENTS: WiglyWoo.entitlements
+  WiglyCamera:
+    type: system-extension
+    platform: macOS
+    sources:
+      - WiglyCamera
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.wiglywoo.macos.camera
+      CODE_SIGN_ENTITLEMENTS: WiglyCamera/WiglyCamera.entitlements
+    dependencies: []
