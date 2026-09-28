@@ -35,6 +35,15 @@ jobs:
           cache-dependency-path: core/go.mod
       - name: Build app
         run: ./macos/package-app.sh
+      - name: Zip app
+        run: ditto -c -k --sequesterRsrc --keepParent macos/dist/WiglyWoo.app WiglyWoo-macos-arm64.zip
+      - name: Upload macOS app
+        uses: actions/upload-artifact@v4
+        with:
+          name: wigly-woo-macos
+          path: WiglyWoo-macos-arm64.zip
+          if-no-files-found: error
+          retention-days: 7
 
   android:
     runs-on: ubuntu-latest

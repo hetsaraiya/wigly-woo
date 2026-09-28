@@ -10,7 +10,7 @@ cask "wigly-woo" do
   desc "Nearby file transfer and remote companion"
   homepage "https://github.com/hetsaraiya/wigly-woo"
 
-  depends_on macos: ">= :ventura"
+  depends_on macos: :ventura
 
   app "WiglyWoo.app"
 

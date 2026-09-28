@@ -1,13 +1,9 @@
 import SwiftUI
+import AppKit
 
-@main
-struct WiglyWooApp: App {
-    @StateObject private var core = CoreBridge.shared
-    @StateObject private var companion = CompanionBridge.shared
-    @ObservedObject private var ui = AppUI.shared
-
-    init() {
-        WWFont.register()
+/// Starts the core and companion once, outside SwiftUI's scene updates.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
         let dir = FileManager.default
             .urls(for: .downloadsDirectory, in: .userDomainMask).first?
             .appendingPathComponent("wigly-woo")
@@ -16,6 +12,17 @@ struct WiglyWooApp: App {
         CoreBridge.shared.start(name: Host.current().localizedName ?? "Mac", saveDir: dir)
         CompanionBridge.shared.start()
     }
+}
+
+@main
+struct WiglyWooApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
+    @StateObject private var core = CoreBridge.shared
+    @StateObject private var companion = CompanionBridge.shared
+    @AppStorage("showMenuBar") private var showMenuBar = true
+
+    // Fonts only; nothing here may publish state SwiftUI is observing.
+    init() { WWFont.register() }
 
     var body: some Scene {
         Window("Wigly Woo", id: "main") {
@@ -26,7 +33,7 @@ struct WiglyWooApp: App {
         }
         .windowStyle(.hiddenTitleBar)
 
-        MenuBarExtra(isInserted: $ui.showMenuBar) {
+        MenuBarExtra(isInserted: $showMenuBar) {
             MenuBarPanel()
                 .environmentObject(core)
                 .environmentObject(companion)
