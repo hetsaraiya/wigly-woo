@@ -149,7 +149,8 @@ fun WWToggle(checked: Boolean, onToggle: (Boolean) -> Unit) {
             Modifier.size(40.dp, 24.dp).background(if (checked) t.accent else t.toggleOff, Radius).padding(3.dp),
             contentAlignment = if (checked) Alignment.CenterEnd else Alignment.CenterStart
         ) {
-            Box(Modifier.size(18.dp).background(t.bg, RoundedCornerShape(1.dp)))
+            // Always paper-white: a dark knob on dark ground read as a hole.
+            Box(Modifier.size(18.dp).background(Color(0xFFF3F2F2), RoundedCornerShape(1.dp)))
         }
     }
 }

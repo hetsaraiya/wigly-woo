@@ -85,6 +85,15 @@ data class CompanionConfig(
             return parsed.takeIf { it.isComplete }
         }
 
+        /** The name the person gave this phone ("Galaxy A52s 5G"), not the model code. */
+        fun deviceName(context: Context): String {
+            val cr = context.contentResolver
+            return listOf(
+                runCatching { android.provider.Settings.Global.getString(cr, "device_name") }.getOrNull(),
+                runCatching { android.provider.Settings.Secure.getString(cr, "bluetooth_name") }.getOrNull(),
+            ).firstOrNull { !it.isNullOrBlank() } ?: android.os.Build.MODEL ?: "Android"
+        }
+
         fun generateSecret(): String {
             val bytes = ByteArray(24)
             SecureRandom().nextBytes(bytes)

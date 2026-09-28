@@ -163,7 +163,8 @@ struct WWToggle: View {
         Button { isOn.toggle() } label: {
             ZStack(alignment: isOn ? .trailing : .leading) {
                 RoundedRectangle(cornerRadius: 2).fill(isOn ? theme.accent : theme.toggleOff)
-                RoundedRectangle(cornerRadius: 1).fill(theme.bg).frame(width: 14, height: 14).padding(3)
+                // Always paper-white: a dark knob on dark ground read as a hole.
+                RoundedRectangle(cornerRadius: 1).fill(Color(hex: 0xf3f2f2)).frame(width: 14, height: 14).padding(3)
             }
             .frame(width: 34, height: 20)
             .animation(.easeOut(duration: 0.15), value: isOn)
