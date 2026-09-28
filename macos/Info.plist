@@ -14,6 +14,8 @@
     <key>CFBundleVersion</key><string>2</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>NSHighResolutionCapable</key><true/>
-    <key>NSBluetoothAlwaysUsageDescription</key><string>Wigly Woo uses Bluetooth for nearby companion discovery and transfers.</string>
+    <key>NSBluetoothAlwaysUsageDescription</key><string>Wigly Woo uses Bluetooth to tell when your phone is near this Mac.</string>
+    <key>NSLocationUsageDescription</key><string>Wigly Woo uses Location to join a phone hotspot from this Mac.</string>
+    <key>NSAppleEventsUsageDescription</key><string>Wigly Woo reads the front browser tab so you can open it on your phone.</string>
 </dict>
 </plist>

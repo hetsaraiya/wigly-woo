@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         CoreBridge.shared.start(name: Host.current().localizedName ?? "Mac", saveDir: dir)
         CompanionBridge.shared.start()
         HotKey.shared.install()
+        BlePresence.shared.start()
     }
 }
 

@@ -154,7 +154,7 @@ final class CompanionBridge: NSObject, ObservableObject, UNUserNotificationCente
                 MirrorController.shared.failed(message["reason"] as? String ?? "The phone could not mirror")
             case "clipboard": self.receiveClipboard(message)
             case "clipboard_ack": self.receiveClipboardAcknowledgement(message)
-            default: break
+            default: EcosystemRouter.handle(type, message)
             }
         }
     }

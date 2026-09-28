@@ -1084,6 +1084,9 @@ private struct PhoneScreen: View {
                     CompanionBridge.shared.send(["type": "hotspot_request"])
                     Toaster.shared.show("Asking \(phone) to turn on its hotspot")
                 }.wwButton(theme, .secondary)
+                Button("Handoff") { HandoffBridge.sendFrontTab() }.wwButton(theme, .secondary)
+                Button("Ring") { CompanionBridge.shared.send(["type": "ring", "target": "phone"]) }.wwButton(theme, .secondary)
+                Button("Unlock") { UnlockStore.unlockPhone() }.wwButton(theme, .secondary)
             }
             Text(mirror.shizuku).font(WWFont.serif(14)).foregroundStyle(theme.muted)
             if mirror.latencyMs > 0 {
@@ -1135,6 +1138,7 @@ struct MenuBarLabel: View {
 }
 
 struct MenuBarPanel: View {
+    @ObservedObject private var phoneStatus = PhoneStatus.shared
     @EnvironmentObject private var core: CoreBridge
     @EnvironmentObject private var companion: CompanionBridge
     @ObservedObject private var config = CompanionConfig.shared
@@ -1150,6 +1154,7 @@ struct MenuBarPanel: View {
             HStack(spacing: 10) {
                 StatusDot(theme: theme, status: companion.status)
                 Text(statusCopy(companion.status, phone: phone).0).font(WWFont.serif(14, .semibold))
+            Text(phoneStatus.line).font(WWFont.serif(12)).foregroundStyle(theme.muted)
             }
             .padding(.horizontal, 8).padding(.vertical, 6)
 
