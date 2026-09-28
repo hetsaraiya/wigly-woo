@@ -14,6 +14,7 @@ import (
 	"github.com/wiglywoo/core/crypto"
 	"github.com/wiglywoo/core/discovery"
 	"github.com/wiglywoo/core/link"
+	"github.com/wiglywoo/core/session"
 	"github.com/wiglywoo/core/transfer"
 )
 
@@ -22,6 +23,7 @@ type Config struct {
 	Name    string // shown to peers
 	SaveDir string // where received files land
 	Port    int    // transfer TCP port (0 = pick free)
+	Caps    uint32 // discovery.Cap* bits advertised on the beacon
 }
 
 // Event is anything pushed up to the UI. Concrete types below.
@@ -57,12 +59,39 @@ type Errorf struct{ Message string }
 // Canceled is emitted when the user aborts the active transfer(s).
 type Canceled struct{}
 
+// SessionOpen is emitted when a media session is up. The file descriptors are
+// datagram sockets, one per channel, and the shell owns them.
+type SessionOpen struct {
+	ID          string
+	Fingerprint string
+	Role        string
+	VideoFD     int
+	AudioFD     int
+	ControlFD   int
+	MetaFD      int
+}
+
+// SessionClosed is emitted when that session ends.
+type SessionClosed struct{ ID string }
+
+// SessionError is a session failure. It is separate from Errorf so a mirror
+// problem is not reported as a failed file transfer.
+type SessionError struct{ Message string }
+
+// HotspotReady is emitted when this device has brought a hotspot up. The
+// passphrase stays in-process; the shell forwards it over the encrypted relay.
+type HotspotReady struct {
+	SSID string
+	PSK  string
+}
+
 // Core is the engine.
 type Core struct {
 	cfg      Config
 	identity *crypto.Identity
 	browser  *discovery.Browser
 	server   *transfer.Server
+	sessions *session.Listener
 	manager  *link.Manager
 
 	events chan Event
@@ -75,6 +104,11 @@ type Core struct {
 	cancelMu   sync.Mutex
 	cancelers  map[int]func() // id -> abort func for in-progress transfers
 	nextCancel int
+
+	caps        uint32
+	sessionPort int
+	allowed     map[string]struct{}
+	live        map[string]*session.Conn
 }
 
 // New builds a Core with a fresh identity.
@@ -90,7 +124,7 @@ func New(cfg Config) (*Core, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Core{
+	c := &Core{
 		cfg:       cfg,
 		identity:  id,
 		manager:   link.NewManager(link.NoLevers{}),
@@ -99,7 +133,14 @@ func New(cfg Config) (*Core, error) {
 		cancel:    cancel,
 		pending:   make(map[string]chan bool),
 		cancelers: make(map[int]func()),
-	}, nil
+		caps:      cfg.Caps,
+		allowed:   make(map[string]struct{}),
+		live:      make(map[string]*session.Conn),
+	}
+	c.manager.SetHotspotReady(func(ssid, psk string) {
+		c.emit(HotspotReady{SSID: ssid, PSK: psk})
+	})
+	return c, nil
 }
 
 // Identity exposes this device's name + fingerprint for display at pairing.
@@ -134,6 +175,16 @@ func (c *Core) Start() error {
 		}
 	}()
 
+	if ln, err := session.Listen(":0", c.identity, c.allowFingerprint); err != nil {
+		c.emit(SessionError{Message: "session: " + err.Error()})
+	} else {
+		c.sessions = ln
+		c.mu.Lock()
+		c.sessionPort = ln.Port()
+		c.mu.Unlock()
+		go c.acceptSessions()
+	}
+
 	c.browser = discovery.NewBrowser(c.identity.Fingerprint)
 	c.browser.OnPeer = func(p discovery.Peer) { c.emit(PeerFound{Peer: p}) }
 	go func() {
@@ -142,14 +193,8 @@ func (c *Core) Start() error {
 		}
 	}()
 
-	beacon := discovery.Beacon{
-		ID:          c.identity.Fingerprint, // fingerprint doubles as stable ID
-		Name:        c.cfg.Name,
-		Port:        c.cfg.Port,
-		Fingerprint: c.identity.Fingerprint,
-	}
 	go func() {
-		if err := discovery.Announce(c.ctx, beacon); err != nil && c.ctx.Err() == nil {
+		if err := discovery.Announce(c.ctx, c.snapshotBeacon); err != nil && c.ctx.Err() == nil {
 			c.emit(Errorf{Message: "announce: " + err.Error()})
 		}
 	}()
@@ -161,6 +206,16 @@ func (c *Core) Stop() {
 	c.cancel()
 	if c.server != nil {
 		_ = c.server.Close()
+	}
+	if c.sessions != nil {
+		_ = c.sessions.Close()
+	}
+	c.mu.Lock()
+	live := c.live
+	c.live = map[string]*session.Conn{}
+	c.mu.Unlock()
+	for _, conn := range live {
+		conn.Close()
 	}
 }
 

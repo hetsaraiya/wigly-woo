@@ -3,9 +3,9 @@
 //
 // Strategies are tried in order; the first that can reach the peer wins. The
 // transfer layer never learns which one won — that decoupling is the whole
-// point. Phase 1 ships SameLAN working; Hotspot and WifiDirect are stubs whose
-// actual radio work is fulfilled by the platform shell via the FFI "link
-// levers" (the core cannot toggle radios portably).
+// point. SameLAN works on any shared subnet. Hotspot works once the shell arms
+// it and performs the radio change. Wi-Fi Direct stays unsupported because
+// macOS has no public API for it.
 package link
 
 import (

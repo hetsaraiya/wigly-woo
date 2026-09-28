@@ -53,6 +53,9 @@ func (c *Conn) TakeFDs() (video, audio, control, meta int) {
 	return c.remote[0], c.remote[1], c.remote[2], c.remote[3]
 }
 
+// Done closes when the session ends.
+func (c *Conn) Done() <-chan struct{} { return c.done }
+
 // Close tears down the TLS connection and the local ends of the sockets.
 func (c *Conn) Close() {
 	c.once.Do(func() {
