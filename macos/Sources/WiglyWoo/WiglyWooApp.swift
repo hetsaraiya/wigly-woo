@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         CompanionBridge.shared.start()
         HotKey.shared.install()
         BlePresence.shared.start()
+        EdgeController.shared.start()
     }
 }
 
