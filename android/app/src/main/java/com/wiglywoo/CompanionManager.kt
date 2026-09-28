@@ -6,6 +6,7 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import com.wiglywoo.mirror.MirrorHost
 import org.json.JSONObject
 import java.util.concurrent.CopyOnWriteArraySet
 
@@ -45,6 +46,7 @@ object CompanionManager {
             app = context.applicationContext
             deviceId = CompanionConfig.deviceId(app)
             ShizukuClipboardBridge.initialize(app)
+            MirrorHost.install(app)
         }
         applyConfig(CompanionConfig.load(app))
     }
@@ -155,6 +157,8 @@ object CompanionManager {
                 CompanionConfig.save(app, config)
             }
             if (!message.optBoolean("reply")) sendHello(reply = true)
+            val fp = message.optString("fingerprint")
+            if (fp.isNotEmpty()) CoreBridge.allowFingerprint(fp)
         } else if (message.optString("type") == "clipboard_ack") {
             if (message.optString("clipboardID") == pendingClipboardId) {
                 pendingClipboardId = null
@@ -183,11 +187,18 @@ object CompanionManager {
             }
         }
         messageListeners.forEach { it(message) }
+        MirrorHost.onRelay(message)
     }
 
     private fun sendHello(reply: Boolean) {
+        val identity = runCatching { identityFingerprint() }.getOrDefault("")
         send(JSONObject().put("type", "hello").put("name", CompanionConfig.deviceName(app))
-            .put("kind", "android").put("reply", reply))
+            .put("kind", "android").put("reply", reply).put("fingerprint", identity))
+    }
+
+    private fun identityFingerprint(): String {
+        if (CoreBridge.loadError != null) return ""
+        return CoreBridge.identity().optString("fingerprint")
     }
 
     /** The Mac name as last announced, for UI copy. */

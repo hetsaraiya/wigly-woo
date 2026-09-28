@@ -19,13 +19,22 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import com.wiglywoo.mirror.MirrorHost
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.Executors
 
-data class PeerRow(val id: String, val name: String, val fingerprint: String)
+data class PeerRow(
+    val id: String,
+    val name: String,
+    val fingerprint: String,
+    val addr: String = "",
+    val port: Int = 0,
+    val caps: Int = 0,
+    val session: Int = 0,
+)
 data class TransferUi(val name: String, val dir: String, val peer: String, val sent: Long, val total: Long, val speed: Double)
 data class Trust(val name: String, val fingerprint: String, val file: String, val size: Long)
 data class QueuedSend(val id: String, val peer: PeerRow, val uri: Uri, val name: String, val size: Long)
@@ -161,8 +170,12 @@ object WooState {
     private fun handle(ev: JSONObject) {
         when (ev.optString("type")) {
             "peer_found" -> {
-                val row = PeerRow(ev.optString("id"), ev.optString("name"), ev.optString("fingerprint"))
-                if (peers.none { it.id == row.id }) peers.add(row)
+                val row = PeerRow(
+                    ev.optString("id"), ev.optString("name"), ev.optString("fingerprint"),
+                    ev.optString("addr"), ev.optInt("port"), ev.optInt("caps"), ev.optInt("session"),
+                )
+                val index = peers.indexOfFirst { it.id == row.id }
+                if (index >= 0) peers[index] = row else peers.add(row)
             }
             "trust_request" -> {
                 val req = Trust(ev.optString("name"), ev.optString("fingerprint"), ev.optString("file"), ev.optLong("size"))
@@ -208,6 +221,7 @@ object WooState {
                 else if (wasSending) flash("Canceled")
                 finishTransfer()
             }
+            "session_open", "session_closed", "session_error", "hotspot_ready" -> MirrorHost.onCore(ev)
         }
     }
 

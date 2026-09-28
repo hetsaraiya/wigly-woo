@@ -59,7 +59,9 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import android.media.projection.MediaProjectionManager
 import com.google.mlkit.vision.barcode.common.Barcode
+import com.wiglywoo.mirror.MirrorHost
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import java.io.File
@@ -243,6 +245,12 @@ private fun MainScreen() {
     val kbEnabled = remember(permTick) { wiglyKeyboardEnabled(context) }
     val shizukuStatus = remember(permTick) { ShizukuClipboardBridge.status() }
     val shizukuInstalled = remember(permTick) { shizukuInstalled(context) }
+    val projectionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val data = result.data
+        if (result.resultCode == android.app.Activity.RESULT_OK && data != null) {
+            MirrorHost.deliverProjection(result.resultCode, data)
+        }
+    }
 
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { permTick++ }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
@@ -366,6 +374,11 @@ private fun MainScreen() {
                                             .showInputMethodPicker()
                                     },
                                     onSendClipboard = ::sendClipboard,
+                                    onAllowMirror = {
+                                        val mpm = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                                        projectionLauncher.launch(mpm.createScreenCaptureIntent())
+                                    },
+                                    onStopMirror = { MirrorHost.stop("Stopped on the phone") },
                                 )
                             }
                         }
@@ -737,6 +750,8 @@ private fun CompanionScreen(
     onToggleClipboard: (Boolean) -> Unit,
     onKeyboard: () -> Unit,
     onSendClipboard: () -> Unit,
+    onAllowMirror: () -> Unit = {},
+    onStopMirror: () -> Unit = {},
 ) {
     val t = LocalWW.current
     val connected = config.isComplete && config.enabled && state == SupabaseRealtimeClient.State.CONNECTED
@@ -802,6 +817,17 @@ private fun CompanionScreen(
                 connected -> "Syncs both ways"
                 else -> "Waiting for connection"
             }, minHeight = 60.dp) { WWToggle(config.clipboardEnabled, onToggleClipboard) }
+            val mirror = MirrorHost.statusText
+            RuleRow("Mirroring", when {
+                mirror == "Off" && !shizukuReady -> "Privileged features paused — restart Shizuku"
+                else -> mirror
+            }, minHeight = 60.dp) {
+                when {
+                    MirrorHost.basicConsent -> WWButton("Allow", Kind.Ghost, minHeight = 44.dp, onClick = onAllowMirror)
+                    mirror == "Mirroring" || mirror == "Basic mirroring" || mirror == "Connecting" ->
+                        WWButton("Stop", Kind.Ghost, minHeight = 44.dp, onClick = onStopMirror)
+                }
+            }
             RuleRow("Remote keyboard", when {
                 !kbEnabled -> "Enable the keyboard first"
                 connected -> "Ready for Mac input"
