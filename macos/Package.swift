@@ -11,9 +11,11 @@ let package = Package(
         .systemLibrary(name: "CWooCore", path: "Sources/CWooCore"),
         // ObjC @try/@catch trampoline — Swift cannot catch NSException.
         .target(name: "WiglyExceptionGuard", path: "Sources/WiglyExceptionGuard"),
+        .target(name: "WiglyMirror", path: "Sources/WiglyMirror"),
+        .testTarget(name: "WiglyMirrorTests", dependencies: ["WiglyMirror"], path: "Tests/WiglyMirrorTests"),
         .executableTarget(
             name: "WiglyWoo",
-            dependencies: ["CWooCore", "WiglyExceptionGuard"],
+            dependencies: ["CWooCore", "WiglyExceptionGuard", "WiglyMirror"],
             linkerSettings: [
                 // The prebuilt static archive + the frameworks the Go runtime needs.
                 .unsafeFlags([

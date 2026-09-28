@@ -9,11 +9,34 @@ struct Peer: Identifiable, Decodable, Hashable {
     let addr: String
     let port: Int
     let fingerprint: String
+    var caps: UInt32 = 0
+    var session: Int = 0
+
+    enum CodingKeys: String, CodingKey { case id, name, addr, port, fingerprint, caps, session }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        addr = try c.decode(String.self, forKey: .addr)
+        port = try c.decode(Int.self, forKey: .port)
+        fingerprint = try c.decode(String.self, forKey: .fingerprint)
+        caps = try c.decodeIfPresent(UInt32.self, forKey: .caps) ?? 0
+        session = try c.decodeIfPresent(Int.self, forKey: .session) ?? 0
+    }
 }
 
 struct Identity: Decodable {
     let name: String
     let fingerprint: String
+    let session: Int
+
+    enum CodingKeys: String, CodingKey { case name, fingerprint, session }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        fingerprint = try c.decode(String.self, forKey: .fingerprint)
+        session = try c.decodeIfPresent(Int.self, forKey: .session) ?? 0
+    }
 }
 
 struct TrustRequest: Identifiable {
@@ -75,6 +98,8 @@ final class CoreBridge: ObservableObject {
     @Published var received: [URL] = []
     @Published var sessionTotal: Int64 = 0
     @Published var pendingTrust: TrustRequest?
+    /// TCP port of this Mac's media session, from the core identity.
+    @Published var sessionPort: Int = 0
     /// Files waiting to go out after the current send.
     @Published private(set) var queue: [QueuedSend] = []
     @Published private(set) var sent: [SentRecord] = []
@@ -166,9 +191,9 @@ final class CoreBridge: ObservableObject {
 
         switch type {
         case "peer_found":
-            if let p = try? JSONDecoder().decode(Peer.self, from: data),
-               !peers.contains(where: { $0.id == p.id }) {
-                peers.append(p)
+            if let p = try? JSONDecoder().decode(Peer.self, from: data) {
+                if let index = peers.firstIndex(where: { $0.id == p.id }) { peers[index] = p }
+                else { peers.append(p) }
             }
         case "trust_request":
             let req = TrustRequest(
@@ -212,6 +237,9 @@ final class CoreBridge: ObservableObject {
             active = nil
             resetSpeed()
             refreshReceived()
+            if dir == "send", MirrorController.shared.consumeOpen(name) {
+                CompanionBridge.shared.send(["type": "open_received", "name": name])
+            }
             pump()
         case "canceled", "error":
             let wasSending = currentSend != nil
@@ -225,6 +253,12 @@ final class CoreBridge: ObservableObject {
                 Toaster.shared.show("Canceled")
             }
             pump()
+        case "session_open":
+            MirrorController.shared.sessionOpened(obj)
+        case "session_closed":
+            MirrorController.shared.sessionClosed(obj["id"] as? String ?? "")
+        case "session_error":
+            MirrorController.shared.failed(obj["message"] as? String ?? "The session failed")
         default:
             break
         }
@@ -251,6 +285,7 @@ final class CoreBridge: ObservableObject {
         defer { woo_free(c) }
         if let d = String(cString: c).data(using: .utf8) {
             identity = try? JSONDecoder().decode(Identity.self, from: d)
+            sessionPort = identity?.session ?? 0
         }
     }
 }

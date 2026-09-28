@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import CWooCore
 import UserNotifications
 
 enum CompanionStatus { case notSet, paused, connecting, connected, error, offline }
@@ -107,7 +108,14 @@ final class CompanionBridge: NSObject, ObservableObject, UNUserNotificationCente
     }
 
     private func sendHello(reply: Bool) {
-        send(["type": "hello", "name": Host.current().localizedName ?? "Mac", "kind": "mac", "reply": reply])
+        send([
+            "type": "hello",
+            "name": Host.current().localizedName ?? "Mac",
+            "kind": "mac",
+            "reply": reply,
+            "fingerprint": CoreBridge.shared.identity?.fingerprint ?? "",
+            "session": CoreBridge.shared.sessionPort,
+        ])
     }
 
     func send(_ message: [String: Any]) {
@@ -135,8 +143,15 @@ final class CompanionBridge: NSObject, ObservableObject, UNUserNotificationCente
                 }
             case "hello":
                 if let name = message["name"] as? String, !name.isEmpty { self.config.rememberPeer(name) }
+                if let fp = message["fingerprint"] as? String, !fp.isEmpty {
+                    fp.withCString { woo_session_allow($0) }
+                }
                 self.helloCount += 1
                 if message["reply"] as? Bool != true { self.sendHello(reply: true) }
+            case "mirror_ready":
+                MirrorController.shared.ready(message["mode"] as? String ?? "shizuku")
+            case "mirror_error":
+                MirrorController.shared.failed(message["reason"] as? String ?? "The phone could not mirror")
             case "clipboard": self.receiveClipboard(message)
             case "clipboard_ack": self.receiveClipboardAcknowledgement(message)
             default: break

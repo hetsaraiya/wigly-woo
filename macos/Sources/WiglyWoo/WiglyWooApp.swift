@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         CoreBridge.shared.start(name: Host.current().localizedName ?? "Mac", saveDir: dir)
         CompanionBridge.shared.start()
+        HotKey.shared.install()
     }
 }
 

@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import WiglyMirror
 import ServiceManagement
 import UniformTypeIdentifiers
 import CoreImage.CIFilterBuiltins
@@ -9,12 +10,14 @@ import CoreImage.CIFilterBuiltins
 enum Destination: String, CaseIterable {
     case send = "Send"
     case inbox = "Inbox"
+    case phone = "Phone"
     case companion = "Companion"
 
     var symbol: String {
         switch self {
         case .send: return "paperplane"
         case .inbox: return "tray"
+        case .phone: return "iphone"
         case .companion: return "link"
         }
     }
@@ -92,6 +95,7 @@ struct ContentView: View {
                             switch ui.destination {
                             case .send: SendScreen(theme: theme)
                             case .inbox: InboxScreen(theme: theme)
+                            case .phone: PhoneScreen(theme: theme)
                             case .companion: CompanionScreen(theme: theme)
                             }
                         }
@@ -1057,6 +1061,70 @@ private struct SettingsDialog: View {
     }
 }
 
+// MARK: - Phone
+
+private struct PhoneScreen: View {
+    let theme: WWTheme
+    @ObservedObject private var mirror = MirrorController.shared
+    @ObservedObject private var config = CompanionConfig.shared
+    @State private var query = ""
+
+    var body: some View {
+        let phone = config.phoneName
+        VStack(alignment: .leading, spacing: 28) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Phone").font(WWFont.serif(34, .semibold))
+                Text(mirror.detail).font(WWFont.serif(15)).foregroundStyle(theme.muted)
+            }
+            HStack(spacing: 10) {
+                Button(mirror.phase == .streaming ? "Stop mirroring" : "Mirror phone") { mirror.toggle() }
+                    .wwButton(theme, .primary)
+                    .keyboardShortcut("m", modifiers: [.command, .shift])
+                Button("Hotspot") {
+                    CompanionBridge.shared.send(["type": "hotspot_request"])
+                    Toaster.shared.show("Asking \(phone) to turn on its hotspot")
+                }.wwButton(theme, .secondary)
+            }
+            Text(mirror.shizuku).font(WWFont.serif(14)).foregroundStyle(theme.muted)
+            if mirror.latencyMs > 0 {
+                Text("About \(mirror.latencyMs) ms from the phone's clock").font(WWFont.serif(13)).foregroundStyle(theme.muted)
+            }
+            HStack(spacing: 8) {
+                tool("Back") { mirror.button(ControlCodec.back) }
+                tool("Home") { mirror.button(ControlCodec.home) }
+                tool("Recents") { mirror.button(ControlCodec.recents) }
+                tool("Controls") { mirror.button(ControlCodec.settings) }
+                tool(mirror.recording ? "Stop recording" : "Record") { mirror.toggleRecord() }
+                tool("Screen off") { mirror.screenOff(true) }
+            }
+            if !mirror.apps.isEmpty {
+                Kicker(theme: theme, text: "Apps")
+                TextField("Search apps", text: $query).textFieldStyle(.plain).font(WWFont.serif(15))
+                let shown = mirror.apps.filter { query.isEmpty || $0.label.localizedCaseInsensitiveContains(query) }
+                ForEach(shown.prefix(12)) { app in
+                    Button(app.label) { mirror.launch(app.component) }
+                        .buttonStyle(.plain)
+                        .font(WWFont.serif(15))
+                }
+            }
+            if !mirror.recent.isEmpty {
+                Kicker(theme: theme, text: "Recent on \(phone)")
+                ForEach(mirror.recent) { file in
+                    Text(file.name).font(WWFont.serif(14))
+                        .onDrag { NSItemProvider(object: file.name as NSString) }
+                        .onTapGesture {
+                            CompanionBridge.shared.send(["type": "send_recent", "uri": file.uri])
+                        }
+                }
+            }
+        }
+    }
+
+    private func tool(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(title, action: action).wwButton(theme, .secondary)
+    }
+}
+
 // MARK: - Menu bar extra
 
 struct MenuBarLabel: View {
@@ -1100,6 +1168,7 @@ struct MenuBarPanel: View {
             }
 
             Spacer().frame(height: 10)
+            item("Mirror phone") { MirrorController.shared.toggle() }
             item("Send clipboard to \(phone)") {
                 let sent = companion.sendClipboardNow()
                 Toaster.shared.show(sent ? "Clipboard sent to \(phone)" : "Queued. Sends when \(phone) reconnects")
